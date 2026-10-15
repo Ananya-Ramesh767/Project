@@ -37,7 +37,7 @@ import java.util.Optional;
  *
  * All of this is idempotent: re-running the app never creates duplicate rows.
  */
-@Component
+// @Component — disabled: all lesson-plan / syllabus data is entered by the admin; no demo seed.
 @RequiredArgsConstructor
 public class LessonPlanDataInitializer implements CommandLineRunner {
 
@@ -88,6 +88,15 @@ public class LessonPlanDataInitializer implements CommandLineRunner {
             Integer r = ltpr.get("R");
             boolean requiresLab = p != null && p > 0;
 
+            double theoryHours = (l != null ? l : 0.0) + (r != null ? r : 0.0);
+            double labHours = (p != null ? p : 0.0);
+            double tutorialHours = (t != null ? t : 0.0);
+            double totalHours = theoryHours + labHours + tutorialHours;
+            if (totalHours <= 0 && seed.credits != null) {
+                totalHours = seed.credits.doubleValue();
+                theoryHours = totalHours;
+            }
+
             Subject subject = Subject.builder()
                     .subjectCode(seed.subjectCode)
                     .subjectName(seed.subjectName)
@@ -96,6 +105,10 @@ public class LessonPlanDataInitializer implements CommandLineRunner {
                     .subjectType(requiresLab ? "THEORY_AND_LAB" : "THEORY")
                     .requiresLab(requiresLab)
                     .labDuration(requiresLab ? 2 : null)
+                    .theoryCredits(theoryHours)
+                    .labCredits(labHours > 0 ? labHours / 2.0 : 0.0)
+                    .tutorialCredits(tutorialHours)
+                    .calculatedWeeklyHours(totalHours > 0 ? totalHours : 3.0)
                     .weeklyLecturePeriods(l)
                     .weeklyTutorialPeriods(t)
                     .weeklyPracticalPeriods(p)
@@ -200,6 +213,21 @@ public class LessonPlanDataInitializer implements CommandLineRunner {
                         .active(true)
                         .build()));
 
+        // Ensure faculty has eligibility for the seeded subjects
+        boolean facultyUpdated = false;
+        if (!faculty.getEligibleSubjects().contains(oopJava)) {
+            faculty.getEligibleSubjects().add(oopJava);
+            facultyUpdated = true;
+        }
+        Optional<Subject> aimlOpt = subjectRepository.findBySubjectCode("2321CSC303J");
+        if (aimlOpt.isPresent() && !faculty.getEligibleSubjects().contains(aimlOpt.get())) {
+            faculty.getEligibleSubjects().add(aimlOpt.get());
+            facultyUpdated = true;
+        }
+        if (facultyUpdated) {
+            faculty = facultyRepository.save(faculty);
+        }
+
         Batch batch = batchRepository.findByActiveTrue().stream()
                 .filter(b -> "CSE-3A".equals(b.getBatchName()) && "CSE".equals(b.getDepartment()))
                 .findFirst()
@@ -217,6 +245,17 @@ public class LessonPlanDataInitializer implements CommandLineRunner {
             subjectOfferingRepository.save(SubjectOffering.builder()
                     .batch(batch)
                     .subject(oopJava)
+                    .assignedFaculty(faculty)
+                    .academicYear("2026-2027")
+                    .semester(3)
+                    .active(true)
+                    .build());
+        }
+
+        if (aimlOpt.isPresent() && !subjectOfferingRepository.existsByBatchIdAndSubjectIdAndActiveTrue(batch.getId(), aimlOpt.get().getId())) {
+            subjectOfferingRepository.save(SubjectOffering.builder()
+                    .batch(batch)
+                    .subject(aimlOpt.get())
                     .assignedFaculty(faculty)
                     .academicYear("2026-2027")
                     .semester(3)

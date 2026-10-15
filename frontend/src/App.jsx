@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -14,16 +14,15 @@ import BatchManagementPage from './pages/BatchManagementPage';
 import OfferingManagementPage from './pages/OfferingManagementPage';
 import CalendarManagementPage from './pages/CalendarManagementPage';
 import TimeslotManagementPage from './pages/TimeslotManagementPage';
-import DataReadinessPage from './pages/DataReadinessPage';
 import GenerateTimetablePage from './pages/GenerateTimetablePage';
+import SectionTimetablePage from './pages/SectionTimetablePage';
 import SyllabusManagementPage from './pages/SyllabusManagementPage';
 import GenerateLessonPlanPage from './pages/GenerateLessonPlanPage';
 import MyLessonPlansPage from './pages/MyLessonPlansPage';
+import DataReadinessPage from './pages/DataReadinessPage';
 
-// Keying by pathname forces a remount on every navigation, which replays the
-// route-transition slide-up-and-fade animation (ported from the original
-// prototype's app-screen.active transition) instead of a hard cut.
-function PageTransition({ children }) {
+/** Wraps each routed page with an animated slide-up + correct padding. */
+function Page({ children }) {
   const location = useLocation();
   return (
     <div key={location.pathname} className="route-transition">
@@ -34,120 +33,130 @@ function PageTransition({ children }) {
 
 export default function App() {
   const [user, setUser] = useState(() => {
-    const saved = localStorage.getItem('odysseus_user');
-    return saved ? JSON.parse(saved) : null;
+    try {
+      const saved = localStorage.getItem('odysseus_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch { return null; }
   });
 
-  const handleLogin = (userData) => {
-    setUser(userData);
-    localStorage.setItem('odysseus_user', JSON.stringify(userData));
-  };
+  const handleLogin  = (data) => { setUser(data); localStorage.setItem('odysseus_user', JSON.stringify(data)); };
+  const handleLogout = ()     => { setUser(null);  localStorage.removeItem('odysseus_user'); };
 
-  const handleLogout = () => {
-    setUser(null);
-    localStorage.removeItem('odysseus_user');
-  };
+  const adminHome = '/dashboard';
+  const facultyHome = '/timetable';
 
   return (
     <Router>
       <div className="app-container">
+
+        {/* ── Sidebar (authenticated only) ─────────────────────────────── */}
         {user && <Sidebar user={user} onLogout={handleLogout} />}
 
-        <main className={user ? "main-content" : ""} style={!user ? { width: '100%' } : {}}>
-          <PageTransition>
+        {/* ── Main content ──────────────────────────────────────────────── */}
+        <main className={user ? 'main-content' : ''} style={!user ? { width: '100%' } : {}}>
           <Routes>
-            <Route path="/" element={
-              user ? <Navigate to={user.role === 'ROLE_ADMIN' ? '/dashboard' : '/my-lesson-plans'} replace /> : <LandingPage />
-            } />
+
+            {/* Public */}
+            <Route path="/"      element={user ? <Navigate to={user.role === 'ROLE_ADMIN' ? adminHome : facultyHome} replace /> : <LandingPage />} />
             <Route path="/login" element={<LoginPage onLogin={handleLogin} />} />
 
+            {/* Admin ──────────────────────────────────────────────────── */}
             <Route path="/dashboard" element={
               <ProtectedRoute user={user} requiredRole="ROLE_ADMIN">
-                <AdminDashboard user={user} />
+                <Page><AdminDashboard user={user} /></Page>
               </ProtectedRoute>
             } />
 
             <Route path="/subjects" element={
               <ProtectedRoute user={user} requiredRole="ROLE_ADMIN">
-                <SubjectManagementPage user={user} />
+                <Page><SubjectManagementPage user={user} /></Page>
               </ProtectedRoute>
             } />
 
             <Route path="/nep-rules" element={
               <ProtectedRoute user={user} requiredRole="ROLE_ADMIN">
-                <NepRuleManagementPage user={user} />
+                <Page><NepRuleManagementPage user={user} /></Page>
               </ProtectedRoute>
             } />
 
             <Route path="/faculty" element={
               <ProtectedRoute user={user} requiredRole="ROLE_ADMIN">
-                <FacultyManagementPage user={user} />
+                <Page><FacultyManagementPage user={user} /></Page>
               </ProtectedRoute>
             } />
 
             <Route path="/rooms" element={
               <ProtectedRoute user={user} requiredRole="ROLE_ADMIN">
-                <RoomManagementPage user={user} />
+                <Page><RoomManagementPage user={user} /></Page>
               </ProtectedRoute>
             } />
 
             <Route path="/batches" element={
               <ProtectedRoute user={user} requiredRole="ROLE_ADMIN">
-                <BatchManagementPage user={user} />
+                <Page><BatchManagementPage user={user} /></Page>
               </ProtectedRoute>
             } />
 
             <Route path="/offerings" element={
               <ProtectedRoute user={user} requiredRole="ROLE_ADMIN">
-                <OfferingManagementPage user={user} />
-              </ProtectedRoute>
-            } />
-
-            <Route path="/calendar" element={
-              <ProtectedRoute user={user} requiredRole="ROLE_ADMIN">
-                <CalendarManagementPage user={user} />
+                <Page><OfferingManagementPage user={user} /></Page>
               </ProtectedRoute>
             } />
 
             <Route path="/timeslots" element={
               <ProtectedRoute user={user} requiredRole="ROLE_ADMIN">
-                <TimeslotManagementPage user={user} />
-              </ProtectedRoute>
-            } />
-
-            <Route path="/readiness" element={
-              <ProtectedRoute user={user} requiredRole="ROLE_ADMIN">
-                <DataReadinessPage user={user} />
+                <Page><TimeslotManagementPage user={user} /></Page>
               </ProtectedRoute>
             } />
 
             <Route path="/generate" element={
               <ProtectedRoute user={user} requiredRole="ROLE_ADMIN">
-                <GenerateTimetablePage user={user} />
+                <Page><GenerateTimetablePage user={user} /></Page>
+              </ProtectedRoute>
+            } />
+
+            <Route path="/readiness" element={
+              <ProtectedRoute user={user} requiredRole="ROLE_ADMIN">
+                <Page><DataReadinessPage user={user} /></Page>
               </ProtectedRoute>
             } />
 
             <Route path="/syllabus" element={
               <ProtectedRoute user={user} requiredRole="ROLE_ADMIN">
-                <SyllabusManagementPage user={user} />
+                <Page><SyllabusManagementPage user={user} /></Page>
+              </ProtectedRoute>
+            } />
+
+            {/* Admin + Faculty ────────────────────────────────────────── */}
+            <Route path="/calendar" element={
+              <ProtectedRoute user={user} requiredRole={['ROLE_ADMIN', 'ROLE_FACULTY']}>
+                <Page><CalendarManagementPage user={user} /></Page>
+              </ProtectedRoute>
+            } />
+
+            <Route path="/timetable" element={
+              <ProtectedRoute user={user} requiredRole={['ROLE_ADMIN', 'ROLE_FACULTY']}>
+                <Page><SectionTimetablePage user={user} /></Page>
               </ProtectedRoute>
             } />
 
             <Route path="/lesson-plan" element={
-              <ProtectedRoute user={user} requiredRole={["ROLE_ADMIN", "ROLE_FACULTY"]}>
-                <GenerateLessonPlanPage user={user} />
+              <ProtectedRoute user={user} requiredRole={['ROLE_ADMIN', 'ROLE_FACULTY']}>
+                <Page><GenerateLessonPlanPage user={user} /></Page>
               </ProtectedRoute>
             } />
 
+            {/* Faculty only ───────────────────────────────────────────── */}
             <Route path="/my-lesson-plans" element={
               <ProtectedRoute user={user} requiredRole="ROLE_FACULTY">
-                <MyLessonPlansPage user={user} />
+                <Page><MyLessonPlansPage user={user} /></Page>
               </ProtectedRoute>
             } />
 
-            <Route path="*" element={<Navigate to={user ? (user.role === 'ROLE_ADMIN' ? "/dashboard" : "/my-lesson-plans") : "/"} replace />} />
+            {/* Catch-all */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+
           </Routes>
-          </PageTransition>
         </main>
       </div>
     </Router>

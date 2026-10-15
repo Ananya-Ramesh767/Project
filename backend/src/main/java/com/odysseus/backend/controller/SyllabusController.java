@@ -28,6 +28,8 @@ public class SyllabusController {
     private final SyllabusUnitRepository syllabusUnitRepository;
     private final CourseOutcomeRepository courseOutcomeRepository;
     private final CourseObjectiveRepository courseObjectiveRepository;
+    private final com.odysseus.backend.service.PdfExtractionService pdfExtractionService;
+
 
     // ---------------------------------------------------------------- units
 
@@ -90,6 +92,61 @@ public class SyllabusController {
         syllabusUnitRepository.save(existing);
         return ResponseEntity.ok(Map.of("message", "Syllabus unit deactivated successfully"));
     }
+
+    /**
+     * Extracts and automatically saves Syllabus Units & Topics from an uploaded Syllabus PDF.
+     */
+    @PostMapping(value = "/upload-syllabus-document", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> uploadSyllabusDocument(
+            @PathVariable Long subjectId,
+            @RequestParam("file") org.springframework.web.multipart.MultipartFile file) {
+        Subject subject = subjectRepository.findById(subjectId).orElse(null);
+        if (subject == null) {
+            return ResponseEntity.notFound().build();
+        }
+        try {
+            String text = pdfExtractionService.extractTextFromFile(file);
+            List<Map<String, Object>> parsed = pdfExtractionService.parseSyllabusUnits(text);
+            if (parsed.isEmpty()) {
+                return ResponseEntity.badRequest().body(Map.of("error", "No syllabus units could be detected in this document."));
+            }
+
+            List<SyllabusUnit> savedUnits = new java.util.ArrayList<>();
+            for (Map<String, Object> map : parsed) {
+                String sessionType = (String) map.getOrDefault("sessionType", "THEORY");
+                Integer unitNumber = (Integer) map.getOrDefault("unitNumber", 1);
+                String title = (String) map.getOrDefault("title", "Unit " + unitNumber);
+                Integer periods = (Integer) map.getOrDefault("periodsAllotted", 9);
+                @SuppressWarnings("unchecked")
+                List<String> topics = (List<String>) map.getOrDefault("topics", java.util.Collections.emptyList());
+
+                java.util.Optional<SyllabusUnit> existingOpt = syllabusUnitRepository
+                        .findBySubjectIdAndSessionTypeAndUnitNumberAndActiveTrue(subjectId, sessionType, unitNumber);
+
+
+                SyllabusUnit u = existingOpt.orElseGet(SyllabusUnit::new);
+                u.setSubject(subject);
+                u.setSessionType(sessionType);
+                u.setUnitNumber(unitNumber);
+                u.setTitle(title);
+                u.setTopics(topics);
+                u.setPeriodsAllotted(periods);
+                u.setPeriodsAllottedIsDerived(false);
+                u.setActive(true);
+                savedUnits.add(syllabusUnitRepository.save(u));
+            }
+
+            return ResponseEntity.ok(Map.of(
+                    "totalUnits", savedUnits.size(),
+                    "units", savedUnits,
+                    "message", "Successfully parsed and saved " + savedUnits.size() + " syllabus units!"
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Failed to parse syllabus document: " + e.getMessage()));
+        }
+    }
+
 
     // ------------------------------------------------------------- outcomes
 

@@ -27,8 +27,9 @@ public class Subject {
 
     private Integer semester;
 
+    @Builder.Default
     @Column(nullable = false)
-    private String subjectType; // THEORY, LAB, TUTORIAL, THEORY_AND_LAB
+    private String subjectType = "THEORY"; // THEORY, LAB, TUTORIAL, THEORY_AND_LAB
 
     private double theoryCredits;
     private double labCredits;
@@ -38,6 +39,13 @@ public class Subject {
     private Integer labDuration; // Continuous periods required (e.g., 2 or 3)
 
     private double calculatedWeeklyHours;
+
+    @Builder.Default
+    private Integer requiredFacultyCount = 1;
+
+    public Integer getRequiredFacultyCount() {
+        return (requiredFacultyCount != null && requiredFacultyCount > 0) ? requiredFacultyCount : 1;
+    }
 
     @Builder.Default
     private boolean active = true;

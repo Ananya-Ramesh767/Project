@@ -29,6 +29,12 @@ public class CalendarHoliday {
 
     private String description;
 
+    // false = fixed government/institution holiday
+    // true  = ad-hoc / unexpected holiday added later
+    @Builder.Default
+    @Column(nullable = false)
+    private boolean unexpected = false;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "calendar_id")
     @JsonIgnore

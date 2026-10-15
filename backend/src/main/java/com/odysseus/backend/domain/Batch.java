@@ -31,6 +31,11 @@ public class Batch {
 
     private String academicYear;
 
+    // Room assignment — Block + Floor + Classroom (links to Room Master)
+    private String assignedBlockName;   // e.g. "Academic Block A"
+    private Integer assignedFloorNumber; // e.g. 1
+    private String assignedRoomCode;    // e.g. "A101"
+
     @Builder.Default
     private boolean active = true;
 }

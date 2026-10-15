@@ -28,7 +28,13 @@ public class Room {
     @Column(nullable = false)
     private Integer capacity;
 
+    private String blockName;
+    private Integer floorNumber;
     private String department;
+
+    // Year + Department + Section linkage (Room Master requirements)
+    private Integer yearOfStudy;      // e.g. 1, 2, 3, 4
+    private String assignedSection;   // e.g. "A", "B", "CSE-A"
 
     @Builder.Default
     private boolean active = true;

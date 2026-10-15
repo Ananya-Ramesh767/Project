@@ -12,4 +12,7 @@ public interface SyllabusUnitRepository extends JpaRepository<SyllabusUnit, Long
     List<SyllabusUnit> findBySubjectAndSessionTypeAndActiveTrueOrderByUnitNumberAsc(Subject subject, String sessionType);
     boolean existsBySubjectIdAndSessionTypeAndUnitNumberAndActiveTrue(Long subjectId, String sessionType, Integer unitNumber);
     boolean existsBySubjectIdAndSessionTypeAndUnitNumberAndActiveTrueAndIdNot(Long subjectId, String sessionType, Integer unitNumber, Long id);
+    java.util.Optional<SyllabusUnit> findBySubjectIdAndSessionTypeAndUnitNumberAndActiveTrue(Long subjectId, String sessionType, Integer unitNumber);
 }
+
+

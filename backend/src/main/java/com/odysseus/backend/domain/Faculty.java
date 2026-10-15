@@ -30,6 +30,10 @@ public class Faculty {
     @Column(nullable = false)
     private String department;
 
+    private String designation;
+    private String specialization;
+    private String subjectsHandled;
+
     private Integer maxWeeklyLoad;
 
     @Builder.Default

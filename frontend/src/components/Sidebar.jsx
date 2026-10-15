@@ -2,95 +2,90 @@ import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, BookOpen, Users, DoorOpen, Layers,
-  BookMarked, Calendar, Clock, Sliders, CheckCircle2, PlayCircle, LogOut,
-  ListChecks, CalendarClock
+  BookMarked, Calendar, Clock, Sliders, PlayCircle, LogOut,
+  ListChecks, CalendarClock, Table, ShieldCheck
 } from 'lucide-react';
+
+const NavItem = ({ to, icon: Icon, children }) => (
+  <NavLink to={to} className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
+    <Icon size={17} />
+    <span>{children}</span>
+  </NavLink>
+);
 
 export default function Sidebar({ user, onLogout }) {
   const navigate = useNavigate();
   const isAdmin = user?.role === 'ROLE_ADMIN';
 
-  const handleLogout = () => {
-    onLogout();
-    navigate('/login');
-  };
+  const handleLogout = () => { onLogout(); navigate('/login'); };
+
+  // Strip ROLE_ prefix for display
+  const roleLabel = (user?.role || '').replace('ROLE_', '');
 
   return (
     <aside className="sidebar">
-      <div className="brand-header" style={{ display: 'block' }}>
-        <h1 className="brand-title">Odysseus</h1>
-        <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', letterSpacing: '0.05em' }}>
-          {isAdmin ? 'ADMIN & DATA LAYER' : 'FACULTY PORTAL'}
-        </span>
+
+      {/* Brand */}
+      <div className="brand-header">
+        <div className="brand-logo">O</div>
+        <div style={{ minWidth: 0 }}>
+          <h1 className="brand-title">Odysseus</h1>
+          <span style={{ fontSize: '0.62rem', color: 'var(--accent-secondary)', letterSpacing: '0.07em', fontWeight: 700, textTransform: 'uppercase' }}>
+            {isAdmin ? 'Admin Suite' : 'Faculty Portal'}
+          </span>
+        </div>
       </div>
 
+      {/* Navigation */}
       <nav className="nav-group">
         {isAdmin && (
           <>
-            <NavLink to="/dashboard" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-              <LayoutDashboard size={18} /> Dashboard
-            </NavLink>
-            <NavLink to="/nep-rules" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-              <Sliders size={18} /> NEP Credit Rules
-            </NavLink>
-            <NavLink to="/subjects" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-              <BookOpen size={18} /> Subjects & Credits
-            </NavLink>
-            <NavLink to="/faculty" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-              <Users size={18} /> Faculty Master
-            </NavLink>
-            <NavLink to="/rooms" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-              <DoorOpen size={18} /> Room Master
-            </NavLink>
-            <NavLink to="/batches" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-              <Layers size={18} /> Batches & Sections
-            </NavLink>
-            <NavLink to="/offerings" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-              <BookMarked size={18} /> Subject Offerings
-            </NavLink>
-            <NavLink to="/calendar" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-              <Calendar size={18} /> Academic Calendar
-            </NavLink>
-            <NavLink to="/timeslots" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-              <Clock size={18} /> Timetable Timeslots
-            </NavLink>
-            <NavLink to="/readiness" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-              <CheckCircle2 size={18} /> Data Readiness Check
-            </NavLink>
-            <NavLink to="/generate" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-              <PlayCircle size={18} /> Generate Timetable
-            </NavLink>
-            <div style={{ margin: '0.75rem 0.5rem 0.25rem', fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.08em', color: 'var(--text-dim)', textTransform: 'uppercase' }}>
-              Lesson Plan
-            </div>
-            <NavLink to="/syllabus" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-              <ListChecks size={18} /> Syllabus Management
-            </NavLink>
-            <NavLink to="/lesson-plan" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-              <CalendarClock size={18} /> Generate Lesson Plan
-            </NavLink>
+            <div className="nav-section-title">Academic Setup</div>
+            <NavItem to="/dashboard"  icon={LayoutDashboard}>Dashboard</NavItem>
+            <NavItem to="/nep-rules"  icon={Sliders}>NEP Credit Rules</NavItem>
+            <NavItem to="/subjects"   icon={BookOpen}>Subjects &amp; Credits</NavItem>
+            <NavItem to="/faculty"    icon={Users}>Faculty Master</NavItem>
+            <NavItem to="/rooms"      icon={DoorOpen}>Room Master</NavItem>
+            <NavItem to="/batches"    icon={Layers}>Batches &amp; Sections</NavItem>
+            <NavItem to="/offerings"  icon={BookMarked}>Subject Offerings</NavItem>
+            <NavItem to="/calendar"   icon={Calendar}>Year Calendar</NavItem>
+            <NavItem to="/timeslots"  icon={Clock}>Timeslots</NavItem>
+
+            <div className="nav-section-title">Scheduling</div>
+            <NavItem to="/readiness"  icon={ShieldCheck}>Data Readiness</NavItem>
+            <NavItem to="/generate"   icon={PlayCircle}>Generate Timetable</NavItem>
+            <NavItem to="/timetable"  icon={Table}>View Timetables</NavItem>
+
+            <div className="nav-section-title">Lesson Planning</div>
+            <NavItem to="/syllabus"     icon={ListChecks}>Syllabus Management</NavItem>
+            <NavItem to="/lesson-plan"  icon={CalendarClock}>Lesson Plans</NavItem>
           </>
         )}
 
         {!isAdmin && (
           <>
-            <NavLink to="/my-lesson-plans" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-              <BookMarked size={18} /> My Lesson Plans
-            </NavLink>
-            <NavLink to="/lesson-plan" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-              <CalendarClock size={18} /> Lesson Plan View
-            </NavLink>
+            <div className="nav-section-title">My Workspace</div>
+            <NavItem to="/timetable"       icon={Table}>Section Timetables</NavItem>
+            <NavItem to="/my-lesson-plans" icon={BookMarked}>My Lesson Plans</NavItem>
+            <NavItem to="/lesson-plan"     icon={CalendarClock}>Lesson Plan View</NavItem>
+            <NavItem to="/calendar"        icon={Calendar}>Year Calendar</NavItem>
           </>
         )}
+
       </nav>
 
-      <div style={{ paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
-        <div style={{ marginBottom: '0.75rem', padding: '0 0.5rem' }}>
-          <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>{user?.fullName || user?.username}</div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--accent-primary)' }}>{user?.role}</div>
+      {/* User footer */}
+      <div style={{ paddingTop: '1rem', borderTop: '1px solid var(--border-color)', flexShrink: 0 }}>
+        <div style={{ padding: '0 0.5rem 0.75rem' }}>
+          <div style={{ fontSize: '0.87rem', fontWeight: 700, color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {user?.fullName || user?.username}
+          </div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--accent-secondary)', fontWeight: 700, letterSpacing: '0.04em', marginTop: '0.15rem' }}>
+            {roleLabel}
+          </div>
         </div>
         <button onClick={handleLogout} className="btn btn-secondary" style={{ width: '100%', justifyContent: 'center' }}>
-          <LogOut size={16} /> Sign Out
+          <LogOut size={15} /> Sign Out
         </button>
       </div>
     </aside>

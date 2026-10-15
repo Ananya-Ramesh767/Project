@@ -14,13 +14,10 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 
 /**
- * Implements LESSON_PLAN_CONTRACT.md section 6.2 — generate/fetch a lesson
- * plan and manage individual sessions.
+ * Manages lesson plan generation, fetching, and session tracking/rescheduling.
  */
 @RestController
 @RequestMapping("/api/lesson-plan")
@@ -179,6 +176,41 @@ public class LessonPlanController {
                     "No Faculty record is linked to this account's email (" + user.getEmail() + ")."));
         }
         return ResponseEntity.ok(lessonPlanRepository.findBySubjectOffering_AssignedFaculty_IdAndActiveTrue(faculty.getId()));
+    }
+
+    @GetMapping("/admin/overview")
+    public ResponseEntity<List<Map<String, Object>>> getAdminOverview() {
+        List<LessonPlan> plans = lessonPlanRepository.findByActiveTrue();
+        List<Map<String, Object>> overviewList = new ArrayList<>();
+
+        for (LessonPlan plan : plans) {
+            List<LessonPlanSession> sessions = lessonPlanSessionRepository
+                    .findByLessonPlanIdAndActiveTrueOrderByOverallSequenceAsc(plan.getId());
+
+            int total = sessions.size();
+            long completed = sessions.stream().filter(s -> "COMPLETED".equalsIgnoreCase(s.getStatus())).count();
+            long rescheduled = sessions.stream().filter(s -> "RESCHEDULED".equalsIgnoreCase(s.getStatus())).count();
+            double progress = total > 0 ? ((double) completed / total) * 100.0 : 0.0;
+
+            Map<String, Object> item = new HashMap<>();
+            item.put("lessonPlanId", plan.getId());
+            item.put("batchName", plan.getSubjectOffering() != null && plan.getSubjectOffering().getBatch() != null 
+                    ? plan.getSubjectOffering().getBatch().getBatchName() : "N/A");
+            item.put("subjectCode", plan.getSubjectOffering() != null && plan.getSubjectOffering().getSubject() != null 
+                    ? plan.getSubjectOffering().getSubject().getSubjectCode() : "N/A");
+            item.put("subjectName", plan.getSubjectOffering() != null && plan.getSubjectOffering().getSubject() != null 
+                    ? plan.getSubjectOffering().getSubject().getSubjectName() : "N/A");
+            item.put("facultyName", plan.getSubjectOffering() != null && plan.getSubjectOffering().getAssignedFaculty() != null 
+                    ? plan.getSubjectOffering().getAssignedFaculty().getName() : "Unassigned");
+            item.put("totalSessions", total);
+            item.put("completedSessions", completed);
+            item.put("rescheduledSessions", rescheduled);
+            item.put("completionPercentage", Math.round(progress));
+
+            overviewList.add(item);
+        }
+
+        return ResponseEntity.ok(overviewList);
     }
 
     private LessonPlanWithSessionsDto toDto(LessonPlan plan, List<LessonPlanSession> sessions) {

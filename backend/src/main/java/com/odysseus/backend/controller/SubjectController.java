@@ -3,12 +3,13 @@ package com.odysseus.backend.controller;
 import com.odysseus.backend.domain.Subject;
 import com.odysseus.backend.repository.SubjectRepository;
 import com.odysseus.backend.service.CreditCalculationService;
+import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/admin/subjects")
@@ -17,10 +18,20 @@ public class SubjectController {
 
     private final SubjectRepository subjectRepository;
     private final CreditCalculationService creditCalculationService;
+    private final com.odysseus.backend.service.PdfExtractionService pdfExtractionService;
 
     @GetMapping
-    public ResponseEntity<List<Subject>> getAllSubjects() {
-        return ResponseEntity.ok(subjectRepository.findAll());
+    public ResponseEntity<List<Subject>> getAllSubjects(
+            @RequestParam(required = false) Integer semester,
+            @RequestParam(required = false) String department) {
+        List<Subject> subjects = subjectRepository.findAll();
+        if (semester != null) {
+            subjects = subjects.stream().filter(s -> Objects.equals(s.getSemester(), semester)).collect(Collectors.toList());
+        }
+        if (department != null && !department.trim().isEmpty() && !department.equalsIgnoreCase("ALL")) {
+            subjects = subjects.stream().filter(s -> com.odysseus.backend.util.DepartmentMatcher.matches(s.getDepartment(), department)).collect(Collectors.toList());
+        }
+        return ResponseEntity.ok(subjects);
     }
 
     @GetMapping("/{id}")
@@ -57,7 +68,7 @@ public class SubjectController {
     @DeleteMapping("/{id}")
     public ResponseEntity<?> deleteSubject(@PathVariable Long id) {
         return subjectRepository.findById(id).map(subject -> {
-            subject.setActive(false); // Soft deactivation for relational safety
+            subject.setActive(false);
             subjectRepository.save(subject);
             return ResponseEntity.ok(Map.of("message", "Subject deactivated successfully"));
         }).orElse(ResponseEntity.notFound().build());
@@ -75,6 +86,85 @@ public class SubjectController {
                 "labHours", lab * 2.0,
                 "tutorialHours", tutorial,
                 "totalWeeklyHours", totalHours
+        ));
+    }
+
+    @Data
+    public static class DocumentParseRequest {
+        private String rawText;
+        private Integer defaultSemester;
+        private String defaultDepartment;
+    }
+
+    @PostMapping(value = "/parse-document", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> parseSubjectDocument(
+            @RequestParam("file") org.springframework.web.multipart.MultipartFile file,
+            @RequestParam(value = "department", defaultValue = "Computer Science Engineering") String department,
+            @RequestParam(value = "semester", defaultValue = "5") Integer semester) {
+        try {
+            String text = pdfExtractionService.extractTextFromFile(file);
+            boolean isScanned = (text == null || text.trim().isEmpty());
+            List<Map<String, Object>> subjects = isScanned ? Collections.emptyList() : pdfExtractionService.parseCurriculumSubjects(text, semester, department);
+            return ResponseEntity.ok(Map.of(
+                    "totalExtracted", subjects.size(),
+                    "preview", subjects,
+                    "isScannedImage", isScanned,
+                    "fileName", file.getOriginalFilename() != null ? file.getOriginalFilename() : ""
+            ));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Unable to extract document: " + e.getMessage()));
+        }
+    }
+
+    @PostMapping(value = "/parse-text", consumes = org.springframework.http.MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<?> parseSubjectText(@RequestBody DocumentParseRequest request) {
+        if (request.getRawText() == null || request.getRawText().trim().isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "rawText content is empty."));
+        }
+        List<Map<String, Object>> subjects = pdfExtractionService.parseCurriculumSubjects(
+                request.getRawText(), request.getDefaultSemester(), request.getDefaultDepartment());
+        return ResponseEntity.ok(Map.of(
+                "totalExtracted", subjects.size(),
+                "preview", subjects
+        ));
+    }
+
+    @PostMapping("/batch-save")
+    public ResponseEntity<?> batchSaveSubjects(@RequestBody List<Subject> subjects) {
+        List<Subject> savedList = new ArrayList<>();
+        List<String> updatedCodes = new ArrayList<>();
+
+        for (Subject sub : subjects) {
+            Optional<Subject> existing = subjectRepository.findBySubjectCode(sub.getSubjectCode());
+            if (existing.isPresent()) {
+                Subject exist = existing.get();
+                exist.setSubjectName(sub.getSubjectName());
+                exist.setDepartment(sub.getDepartment());
+                exist.setSemester(sub.getSemester());
+                exist.setSubjectType(sub.getSubjectType());
+                exist.setTheoryCredits(sub.getTheoryCredits());
+                exist.setLabCredits(sub.getLabCredits());
+                exist.setTutorialCredits(sub.getTutorialCredits());
+                exist.setRequiresLab(sub.isRequiresLab());
+                exist.setLabDuration(sub.getLabDuration());
+                exist.setActive(true);
+                creditCalculationService.updateSubjectCalculatedHours(exist);
+                savedList.add(subjectRepository.save(exist));
+                updatedCodes.add(exist.getSubjectCode());
+            } else {
+                creditCalculationService.updateSubjectCalculatedHours(sub);
+                sub.setActive(true);
+                savedList.add(subjectRepository.save(sub));
+            }
+        }
+
+        return ResponseEntity.ok(Map.of(
+                "savedCount", savedList.size(),
+                "savedSubjects", savedList,
+                "updatedCodes", updatedCodes
         ));
     }
 }

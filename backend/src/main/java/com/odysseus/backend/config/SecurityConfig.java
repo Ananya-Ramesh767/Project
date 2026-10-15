@@ -47,8 +47,9 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/auth/**").permitAll()
                 .requestMatchers("/h2-console/**").permitAll()
-                .requestMatchers("/api/scheduler/input").permitAll()
-                .requestMatchers("/api/scheduler/generate").permitAll()
+                .requestMatchers("/api/scheduler/**").permitAll()
+                .requestMatchers("/api/timetables/**").permitAll()
+                .requestMatchers("/api/timetable/**").permitAll()
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated()
             )
