@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BookOpen, Plus, Edit2, Trash2, ListChecks, Target, FlaskConical, Rocket, GraduationCap, X, Upload, Check, AlertCircle } from 'lucide-react';
+import { BookOpen, Plus, Edit2, Trash2, ListChecks, Target, FlaskConical, Rocket, GraduationCap, X, Upload, Check, AlertCircle, FileText, Layers, FileCheck } from 'lucide-react';
 import Modal from '../components/Modal';
 
 const TRACK_ORDER = ['THEORY', 'LAB', 'PROJECT', 'TUTORIAL'];
@@ -30,12 +30,14 @@ export default function SyllabusManagementPage({ user }) {
   const [objectives, setObjectives] = useState([]);
   const [error, setError] = useState('');
 
-  // Syllabus PDF upload
+  // Syllabus PDF upload & preview
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadFile, setUploadFile] = useState(null);
   const [uploadLoading, setUploadLoading] = useState(false);
+  const [savingLoading, setSavingLoading] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState('');
   const [uploadError, setUploadError] = useState('');
+  const [extractedPreview, setExtractedPreview] = useState(null);
 
   const [showUnitModal, setShowUnitModal] = useState(false);
   const [unitForm, setUnitForm] = useState(emptyUnitForm);
@@ -244,7 +246,7 @@ export default function SyllabusManagementPage({ user }) {
     } catch (e) { console.error(e); }
   };
 
-  const handleUploadSyllabus = async (e) => {
+  const handleAnalyseSyllabus = async (e) => {
     e.preventDefault();
     if (!uploadFile || !selectedSubjectId) {
       setUploadError('Please select a syllabus PDF and ensure a subject is selected.');
@@ -256,23 +258,53 @@ export default function SyllabusManagementPage({ user }) {
     try {
       const formData = new FormData();
       formData.append('file', uploadFile);
-      const res = await fetch(`/api/lesson-plan/subjects/${selectedSubjectId}/upload-syllabus-document`, {
+      const res = await fetch(`/api/lesson-plan/subjects/${selectedSubjectId}/preview-syllabus-document`, {
         method: 'POST',
         headers: authHeaders,
         body: formData
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to extract syllabus document');
-      setUploadSuccess(data.message || `Successfully parsed and saved ${data.totalUnits} units!`);
-      fetchSyllabusData(selectedSubjectId);
-      setTimeout(() => {
-        setShowUploadModal(false);
-        setUploadSuccess('');
-      }, 1200);
+      if (!data.units || data.units.length === 0) {
+        throw new Error('No syllabus units or modules could be detected in this document.');
+      }
+      setExtractedPreview(data);
     } catch (err) {
       setUploadError(err.message);
     } finally {
       setUploadLoading(false);
+    }
+  };
+
+  const handleConfirmAndSaveUnits = async () => {
+    if (!extractedPreview || !extractedPreview.units || !selectedSubjectId) return;
+    setSavingLoading(true);
+    setUploadError('');
+    setUploadSuccess('');
+    try {
+      const res = await fetch(`/api/lesson-plan/subjects/${selectedSubjectId}/save-syllabus-units`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({
+          units: extractedPreview.units || [],
+          courseObjectives: extractedPreview.courseObjectives || [],
+          courseOutcomes: extractedPreview.courseOutcomes || []
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to save syllabus units');
+      setUploadSuccess(data.message || `Successfully saved ${data.savedCount || extractedPreview.units.length} units!`);
+      fetchSyllabusData(selectedSubjectId);
+      setTimeout(() => {
+        setShowUploadModal(false);
+        setExtractedPreview(null);
+        setUploadFile(null);
+        setUploadSuccess('');
+      }, 900);
+    } catch (err) {
+      setUploadError(err.message);
+    } finally {
+      setSavingLoading(false);
     }
   };
 
@@ -552,8 +584,9 @@ export default function SyllabusManagementPage({ user }) {
       {/* Upload Syllabus PDF Modal */}
       <Modal
         isOpen={showUploadModal}
-        onClose={() => setShowUploadModal(false)}
-        title="Upload Syllabus PDF (Units & Topics)"
+        onClose={() => { setShowUploadModal(false); setExtractedPreview(null); }}
+        title={extractedPreview ? "Review Extracted Syllabus Before Confirmation" : "Upload Syllabus PDF (Units & Topics)"}
+        maxWidth={extractedPreview ? "900px" : "580px"}
       >
         {uploadError && (
           <div className="alert alert-danger" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
@@ -566,31 +599,161 @@ export default function SyllabusManagementPage({ user }) {
           </div>
         )}
 
-        <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
-          Target Subject: <strong>{selectedSubject?.subjectCode} — {selectedSubject?.subjectName}</strong>
-          <br />
-          Upload the complete syllabus PDF. The system automatically parses all Unit names, Modules, and list of topics.
-        </p>
+        {!extractedPreview ? (
+          <div>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
+              Target Subject: <strong>{selectedSubject?.subjectCode} — {selectedSubject?.subjectName}</strong>
+              <br />
+              Upload the complete syllabus PDF. The system will analyse all pages, identify subject details, unit structures, and extract complete topics for review before confirmation.
+            </p>
 
-        <form onSubmit={handleUploadSyllabus}>
-          <div className="form-group">
-            <label className="form-label">Syllabus PDF Document *</label>
-            <input
-              type="file"
-              className="form-input"
-              accept=".pdf,.txt,.doc,.docx"
-              onChange={e => setUploadFile(e.target.files[0])}
-              required
-            />
-          </div>
+            <form onSubmit={handleAnalyseSyllabus}>
+              <div className="form-group">
+                <label className="form-label">Syllabus PDF Document *</label>
+                <input
+                  type="file"
+                  className="form-input"
+                  accept=".pdf,.txt,.doc,.docx"
+                  onChange={e => setUploadFile(e.target.files[0])}
+                  required
+                />
+              </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '1.5rem' }}>
-            <button type="button" className="btn btn-secondary" onClick={() => setShowUploadModal(false)}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={uploadLoading}>
-              {uploadLoading ? 'Extracting Units & Topics…' : 'Extract & Save Units'}
-            </button>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '1.5rem' }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setShowUploadModal(false)}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={uploadLoading}>
+                  {uploadLoading ? 'Analysing Entire Document…' : 'Analyse Syllabus Document'}
+                </button>
+              </div>
+            </form>
           </div>
-        </form>
+        ) : (
+          <div>
+            {/* Validation Metrics Grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.75rem', marginBottom: '1.25rem' }}>
+              <div style={{ background: 'rgba(255, 255, 255, 0.05)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '0.65rem', textAlign: 'center' }}>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '0.2rem' }}>Pages</div>
+                <div style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--accent-primary)' }}>{extractedPreview.totalPagesProcessed || 1}</div>
+              </div>
+              <div style={{ background: 'rgba(255, 255, 255, 0.05)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '0.65rem', textAlign: 'center' }}>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '0.2rem' }}>Units</div>
+                <div style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--accent-secondary)' }}>{extractedPreview.unitsIdentified || extractedPreview.units?.length || 0}</div>
+              </div>
+              <div style={{ background: 'rgba(255, 255, 255, 0.05)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '0.65rem', textAlign: 'center' }}>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '0.2rem' }}>Topics</div>
+                <div style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--accent-success)' }}>{extractedPreview.topicsExtracted || 0}</div>
+              </div>
+              <div style={{ background: 'rgba(255, 255, 255, 0.05)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '0.65rem', textAlign: 'center' }}>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '0.2rem' }}>Objectives</div>
+                <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#38bdf8' }}>{extractedPreview.courseObjectives?.length || extractedPreview.objectivesIdentified || 0}</div>
+              </div>
+              <div style={{ background: 'rgba(255, 255, 255, 0.05)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '0.65rem', textAlign: 'center' }}>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '0.2rem' }}>Course Outcomes</div>
+                <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#f59e0b' }}>{extractedPreview.courseOutcomes?.length || extractedPreview.outcomesIdentified || 0}</div>
+              </div>
+            </div>
+
+            {/* Review Warnings / Advisories */}
+            {extractedPreview.reviewWarnings && extractedPreview.reviewWarnings.length > 0 && (
+              <div className="alert alert-warning" style={{ marginBottom: '1rem', padding: '0.65rem 0.9rem', fontSize: '0.85rem' }}>
+                <div style={{ fontWeight: 600, marginBottom: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <AlertCircle size={15} /> <span>Extraction Notices for Review:</span>
+                </div>
+                <ul style={{ margin: 0, paddingLeft: '1.25rem' }}>
+                  {extractedPreview.reviewWarnings.map((w, idx) => <li key={idx}>{w}</li>)}
+                </ul>
+              </div>
+            )}
+
+            {/* Units & Topics Preview */}
+            <div style={{ maxHeight: '250px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '0.75rem', marginBottom: '1rem', background: 'rgba(0,0,0,0.2)' }}>
+              <div style={{ fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: 'var(--accent-primary)' }}>
+                Syllabus Units &amp; Topics ({extractedPreview.units?.length || 0}):
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                {extractedPreview.units?.map((u, i) => (
+                  <div key={i} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '6px', padding: '0.65rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                      <span style={{ fontWeight: 700, fontSize: '0.88rem', color: 'var(--accent-primary)' }}>
+                        Unit {u.unitNumber}: {u.title}
+                      </span>
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <span className="badge badge-info" style={{ fontSize: '0.72rem' }}>{u.sessionType || 'THEORY'}</span>
+                        <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{u.periodsAllotted || 9} Periods</span>
+                      </div>
+                    </div>
+                    {u.topics && u.topics.length > 0 ? (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', marginTop: '0.35rem' }}>
+                        {u.topics.map((t, tidx) => (
+                          <span key={tidx} style={{ background: 'rgba(255,255,255,0.06)', borderRadius: '4px', padding: '0.15rem 0.45rem', fontSize: '0.75rem', color: 'var(--text-bright)' }}>
+                            {t}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontStyle: 'italic' }}>No detailed sub-topics identified</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Course Objectives Preview */}
+            {extractedPreview.courseObjectives && extractedPreview.courseObjectives.length > 0 && (
+              <div style={{ maxHeight: '180px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '0.75rem', marginBottom: '1rem', background: 'rgba(0,0,0,0.2)' }}>
+                <div style={{ fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.5rem', color: '#38bdf8' }}>
+                  Extracted Course Objectives ({extractedPreview.courseObjectives.length}):
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                  {extractedPreview.courseObjectives.map((obj, i) => (
+                    <div key={i} style={{ display: 'flex', gap: '0.5rem', fontSize: '0.82rem', background: 'rgba(255,255,255,0.02)', padding: '0.4rem 0.6rem', borderRadius: '4px' }}>
+                      <span className="badge badge-info" style={{ height: 'fit-content', fontSize: '0.7rem' }}>Obj {obj.sequenceNumber || (i + 1)}</span>
+                      <span style={{ color: 'var(--text-primary)' }}>{obj.description}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Course Outcomes Preview */}
+            {extractedPreview.courseOutcomes && extractedPreview.courseOutcomes.length > 0 && (
+              <div style={{ maxHeight: '180px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '0.75rem', marginBottom: '1.25rem', background: 'rgba(0,0,0,0.2)' }}>
+                <div style={{ fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.5rem', color: '#f59e0b' }}>
+                  Extracted Course Outcomes ({extractedPreview.courseOutcomes.length}):
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                  {extractedPreview.courseOutcomes.map((co, i) => (
+                    <div key={i} style={{ display: 'flex', gap: '0.5rem', fontSize: '0.82rem', background: 'rgba(255,255,255,0.02)', padding: '0.4rem 0.6rem', borderRadius: '4px' }}>
+                      <span className="badge badge-warning" style={{ height: 'fit-content', fontSize: '0.7rem' }}>CO{co.coNumber || (i + 1)}</span>
+                      <span style={{ color: 'var(--text-primary)' }}>{co.description}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1.25rem' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setExtractedPreview(null)}
+                disabled={savingLoading}
+              >
+                Re-upload / Back
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleConfirmAndSaveUnits}
+                disabled={savingLoading}
+                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+              >
+                <Check size={16} />
+                {savingLoading ? 'Saving Syllabus...' : 'Confirm and Save'}
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

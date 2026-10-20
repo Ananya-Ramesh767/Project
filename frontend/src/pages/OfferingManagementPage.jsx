@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { BookMarked, Plus, Trash2, Edit2, Check, X, ChevronDown, Filter, Sparkles, AlertTriangle } from 'lucide-react';
 import Modal from '../components/Modal';
 import { INSTITUTIONAL_PROGRAMMES } from '../utils/programmes';
+import { SEMESTER_OPTIONS, getStoredAcademicContext, setStoredAcademicContext } from '../utils/academicContext';
 
 export default function OfferingManagementPage({ user }) {
   const [offerings, setOfferings] = useState([]);
@@ -10,8 +11,9 @@ export default function OfferingManagementPage({ user }) {
   const [allFaculty, setAllFaculty] = useState([]);
 
   // Scope filters
-  const [filterDept, setFilterDept] = useState(localStorage.getItem('academicContext_dept') || '');
-  const [filterSem, setFilterSem] = useState(localStorage.getItem('academicContext_semester') || '');
+  const initialContext = getStoredAcademicContext();
+  const [filterDept, setFilterDept] = useState(() => initialContext.department || '');
+  const [filterSem, setFilterSem] = useState(() => initialContext.semester || '');
 
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState({ batchId: '', subjectId: '', assignedFacultyId: '', academicYear: '2026-2027' });
@@ -154,13 +156,36 @@ export default function OfferingManagementPage({ user }) {
     } catch (e) { console.error(e); }
   };
 
-  // Group offerings by subject for a cleaner display
+
+  const extractSectionLetter = (batch) => {
+    if (!batch) return '';
+    if (batch.section && batch.section.trim()) return batch.section.trim().toUpperCase();
+    const name = batch.batchName || '';
+    const m = name.match(/(?:Section\s*|-)([A-Za-z0-9]+)$/i) || name.match(/([A-Za-z])$/);
+    if (m) return m[1].toUpperCase();
+    return name.toUpperCase();
+  };
+
+  // Sort offerings section-wise: Section A first, then B, then C, etc. Then by subject code within each section.
+  const sortedOfferings = [...offerings].sort((a, b) => {
+    const secA = extractSectionLetter(a.batch);
+    const secB = extractSectionLetter(b.batch);
+    const secCmp = secA.localeCompare(secB, undefined, { numeric: true, sensitivity: 'base' });
+    if (secCmp !== 0) return secCmp;
+    // Secondary: subject code
+    const codeA = a.subject?.subjectCode || '';
+    const codeB = b.subject?.subjectCode || '';
+    return codeA.localeCompare(codeB);
+  });
+
+  // Also keep groupedBySubject for subject-level display (sorted by subject code)
   const groupedBySubject = offerings.reduce((acc, o) => {
     const key = o.subject?.id;
     if (!acc[key]) acc[key] = { subject: o.subject, offerings: [] };
     acc[key].offerings.push(o);
     return acc;
   }, {});
+
 
   const unassignedCount = offerings.filter(o => !o.assignedFaculty).length;
 
@@ -199,19 +224,27 @@ export default function OfferingManagementPage({ user }) {
             className="form-select"
             style={{ padding: '0.35rem 0.75rem', fontSize: '0.82rem', minWidth: '230px' }}
             value={filterDept}
-            onChange={e => handleDeptChange(e.target.value)}
+            onChange={e => {
+              handleDeptChange(e.target.value);
+              if (e.target.value) setStoredAcademicContext({ department: e.target.value });
+            }}
           >
-            <option value="">All Departments</option>
+            <option value="">-- Select Department --</option>
+            <option value="ALL">All Departments</option>
             {INSTITUTIONAL_PROGRAMMES.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
           <select
             className="form-select"
-            style={{ padding: '0.35rem 0.75rem', fontSize: '0.82rem', minWidth: '130px' }}
+            style={{ padding: '0.35rem 0.75rem', fontSize: '0.82rem', minWidth: '220px' }}
             value={filterSem}
-            onChange={e => handleSemChange(e.target.value)}
+            onChange={e => {
+              handleSemChange(e.target.value);
+              if (e.target.value) setStoredAcademicContext({ semester: e.target.value });
+            }}
           >
-            <option value="">All Semesters</option>
-            {[1,2,3,4,5,6,7,8].map(s => <option key={s} value={s}>Semester {s}</option>)}
+            <option value="">-- Select Semester --</option>
+            <option value="ALL">All Semesters</option>
+            {SEMESTER_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
           </select>
           <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
             {offerings.length} offerings
@@ -279,7 +312,7 @@ export default function OfferingManagementPage({ user }) {
                 </tr>
               </thead>
               <tbody>
-                {offerings.map(o => {
+                {sortedOfferings.map(o => {
                   const isEditing = editingFaculty?.offeringId === o.id;
                   const eligFac = eligibleFacultyCache[o.subject?.id] || [];
 

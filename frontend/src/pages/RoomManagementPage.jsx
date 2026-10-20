@@ -338,6 +338,19 @@ export default function RoomManagementPage({ user }) {
     } catch (e) { console.error(e); }
   };
 
+  const formatFloor = (floorNum) => {
+    const f = Number(floorNum);
+    if (f === 0) return 'Ground Floor';
+    if (f === 1) return 'First Floor';
+    if (f === 2) return 'Second Floor';
+    if (f === 3) return 'Third Floor';
+    if (f === 4) return 'Fourth Floor';
+    if (f === 5) return 'Fifth Floor';
+    if (f === 6) return 'Sixth Floor';
+    if (f === 7) return 'Seventh Floor';
+    return `Floor ${floorNum}`;
+  };
+
   const uniqueBlocks = [...new Set(rooms.map(r => r.blockName).filter(Boolean))];
 
   const filteredRooms = rooms.filter(r => {
@@ -482,9 +495,8 @@ export default function RoomManagementPage({ user }) {
                 <thead>
                   <tr>
                     <th>Room Code</th>
-                    <th>Room Name</th>
-                    <th>Academic Block</th>
-                    <th>Type</th>
+                    <th>Building & Floor Hierarchy</th>
+                    <th>Room Type</th>
                     <th>Capacity</th>
                     <th>Department</th>
                     <th>Assigned Default Section</th>
@@ -496,15 +508,21 @@ export default function RoomManagementPage({ user }) {
                   {filteredRooms.map(r => (
                     <tr key={r.id}>
                       <td><strong>{r.roomCode}</strong></td>
-                      <td>{r.roomName}</td>
                       <td>
-                        <span className="badge badge-secondary" style={{ fontSize: '0.75rem' }}>
-                          {r.blockName || 'Unassigned Block'} · Flr {r.floorNumber ?? 1}
-                        </span>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                          <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
+                            {r.blockName || 'Main Block'} → {formatFloor(r.floorNumber ?? 1)} → {r.roomName}
+                          </span>
+                          {r.blockName === 'Block 3' && (
+                            <span style={{ fontSize: '0.72rem', color: '#38bdf8', fontWeight: 600 }}>
+                              📍 Explicit Institutional Campus Lab Location
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td>
-                        <span className={`badge ${r.roomType === 'LAB' ? 'badge-warning' : 'badge-success'}`}>
-                          {r.roomType === 'LAB' ? 'LABORATORY' : 'CLASSROOM'}
+                        <span className={`badge ${r.roomType === 'LAB' ? 'badge-warning' : r.roomType === 'SEMINAR_HALL' ? 'badge-primary' : 'badge-success'}`}>
+                          {r.roomType === 'LAB' ? 'LABORATORY' : r.roomType === 'SEMINAR_HALL' ? 'MBA / GALLERY' : 'CLASSROOM'}
                         </span>
                       </td>
                       <td><strong>{r.capacity} seats</strong></td>

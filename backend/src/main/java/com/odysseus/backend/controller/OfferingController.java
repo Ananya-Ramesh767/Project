@@ -34,6 +34,7 @@ public class OfferingController {
     public ResponseEntity<List<SubjectOffering>> getAllOfferings(
             @RequestParam(required = false) String department,
             @RequestParam(required = false) Integer semester) {
+        autoSyncOfferingsIfMissing(department, semester);
         List<SubjectOffering> list = offeringRepository.findAll();
         if (semester != null) {
             list = list.stream().filter(o -> {
@@ -298,6 +299,132 @@ public class OfferingController {
             offeringRepository.save(o);
             return ResponseEntity.ok(Map.of("message", "Subject offering deactivated successfully"));
         }).orElse(ResponseEntity.notFound().build());
+    }
+
+    private void autoSyncOfferingsIfMissing(String department, Integer semester) {
+        try {
+            List<Subject> subjects = subjectRepository.findAll().stream()
+                    .filter(Subject::isActive)
+                    .filter(s -> semester == null || Objects.equals(s.getSemester(), semester))
+                    .filter(s -> department == null || department.isEmpty() || department.equalsIgnoreCase("ALL")
+                            || com.odysseus.backend.util.DepartmentMatcher.matches(s.getDepartment(), department))
+                    .collect(Collectors.toList());
+
+            if (subjects.isEmpty()) return;
+
+            // Group subjects by department and semester to ensure sections A..G exist
+            Map<String, Set<Integer>> deptSemPairs = new HashMap<>();
+            for (Subject s : subjects) {
+                if (s.getDepartment() != null && s.getSemester() != null) {
+                    deptSemPairs.computeIfAbsent(s.getDepartment(), k -> new HashSet<>()).add(s.getSemester());
+                }
+            }
+
+            for (Map.Entry<String, Set<Integer>> entry : deptSemPairs.entrySet()) {
+                String d = entry.getKey();
+                for (Integer sem : entry.getValue()) {
+                    ensureDepartmentSections(d, sem);
+                }
+            }
+
+            List<Batch> allBatches = batchRepository.findAll().stream()
+                    .filter(Batch::isActive)
+                    .filter(b -> semester == null || Objects.equals(b.getSemester(), semester))
+                    .filter(b -> department == null || department.isEmpty() || department.equalsIgnoreCase("ALL")
+                            || com.odysseus.backend.util.DepartmentMatcher.matches(b.getDepartment(), department))
+                    .collect(Collectors.toList());
+
+            List<Faculty> allFaculty = facultyRepository.findAll().stream()
+                    .filter(Faculty::isActive)
+                    .collect(Collectors.toList());
+
+            List<SubjectOffering> existingOfferings = new ArrayList<>(offeringRepository.findAll());
+
+            for (Subject sub : subjects) {
+                List<Batch> subBatches = allBatches.stream()
+                        .filter(b -> (sub.getDepartment() == null || com.odysseus.backend.util.DepartmentMatcher.matches(b.getDepartment(), sub.getDepartment()))
+                                && (sub.getSemester() == null || Objects.equals(b.getSemester(), sub.getSemester())))
+                        .sorted(Comparator.comparing(b -> b.getSection() != null ? b.getSection() : b.getBatchName()))
+                        .collect(Collectors.toList());
+
+                // Find eligible faculty for this subject
+                List<Faculty> eligibleFaculty = allFaculty.stream()
+                        .filter(f -> f.getEligibleSubjects() != null && f.getEligibleSubjects().stream().anyMatch(es -> Objects.equals(es.getId(), sub.getId())))
+                        .collect(Collectors.toList());
+
+                for (int i = 0; i < subBatches.size(); i++) {
+                    Batch b = subBatches.get(i);
+                    boolean exists = existingOfferings.stream()
+                            .anyMatch(o -> o.isActive()
+                                    && o.getBatch() != null && Objects.equals(o.getBatch().getId(), b.getId())
+                                    && o.getSubject() != null && Objects.equals(o.getSubject().getId(), sub.getId()));
+
+                    if (!exists) {
+                        Faculty assigned = null;
+                        if (!eligibleFaculty.isEmpty()) {
+                            assigned = eligibleFaculty.get(i % eligibleFaculty.size());
+                        }
+                        SubjectOffering newOff = SubjectOffering.builder()
+                                .batch(b)
+                                .subject(sub)
+                                .assignedFaculty(assigned)
+                                .academicYear(b.getAcademicYear() != null ? b.getAcademicYear() : "2026-2027")
+                                .semester(sub.getSemester() != null ? sub.getSemester() : b.getSemester())
+                                .active(true)
+                                .build();
+                        SubjectOffering saved = offeringRepository.save(newOff);
+                        existingOfferings.add(saved);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Auto-sync offerings failed: {}", e.getMessage());
+        }
+    }
+
+    private void ensureDepartmentSections(String department, Integer semester) {
+        if (department == null || semester == null || department.equalsIgnoreCase("ALL") || department.contains("[object")) return;
+        char[] sections = {'A', 'B', 'C', 'D', 'E', 'F', 'G'};
+        String deptCode = getDeptCode(department);
+        for (char sec : sections) {
+            String secStr = String.valueOf(sec);
+            boolean exists = batchRepository.findAll().stream()
+                    .anyMatch(b -> b.isActive()
+                            && com.odysseus.backend.util.DepartmentMatcher.matches(b.getDepartment(), department)
+                            && Objects.equals(b.getSemester(), semester)
+                            && secStr.equalsIgnoreCase(b.getSection()));
+            if (!exists) {
+                batchRepository.save(Batch.builder()
+                        .department(department)
+                        .semester(semester)
+                        .section(secStr)
+                        .batchName(deptCode + "-" + secStr)
+                        .strength(60)
+                        .academicYear("2026-2027")
+                        .active(true)
+                        .build());
+            }
+        }
+    }
+
+    private String getDeptCode(String department) {
+        if (department == null) return "DEPT";
+        if (department.contains("Artificial Intelligence & Machine Learning") || department.contains("AI & ML")) return "CSE-AIML";
+        if (department.contains("Cyber Security")) return "CSE-CS";
+        if (department.equalsIgnoreCase("Computer Science Engineering")) return "CSE";
+        if (department.equalsIgnoreCase("Information Technology")) return "IT";
+        if (department.equalsIgnoreCase("Mechanical Engineering")) return "MECH";
+        if (department.equalsIgnoreCase("Civil Engineering")) return "CIVIL";
+        if (department.equalsIgnoreCase("Electrical & Electronics")) return "EEE";
+        if (department.equalsIgnoreCase("Electronics & Communication Engineering")) return "ECE";
+        if (department.equalsIgnoreCase("Biomedical Engineering")) return "BME";
+        if (department.equalsIgnoreCase("Automobile Engineering")) return "AUTO";
+        if (department.equalsIgnoreCase("Robotics and Automation Engineering")) return "ROBOTICS";
+        if (department.equalsIgnoreCase("AI and Data Science Engineering")) return "AIDS";
+        if (department.contains("Biotechnology")) return "BIOTECH";
+        if (department.contains("Business System")) return "CSBS";
+        String letters = department.replaceAll("[^A-Z]", "");
+        return letters.isEmpty() ? department.substring(0, Math.min(4, department.length())).toUpperCase() : letters;
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────

@@ -14,6 +14,7 @@ import org.springframework.web.multipart.MultipartFile;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import com.odysseus.backend.domain.Subject;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.*;
@@ -1126,10 +1127,62 @@ public class PdfExtractionService {
         return false;
     }
 
+    public String classifyFacultyDepartment(String subjectCode, String subjectName, Integer semester, String mainDepartment) {
+        if (subjectName == null) subjectName = "";
+        if (subjectCode == null) subjectCode = "";
+        String sName = subjectName.toLowerCase();
+        String sCode = subjectCode.toUpperCase();
+
+        // Check if this is a Special Test for Semesters 3-8 (Aptitude Test, Technical Test)
+        // Rule 3: Semesters 3-8 tests must be assigned only to the main department!
+        boolean isSem3To8 = semester != null && semester >= 3 && semester <= 8;
+        if (isSem3To8 && (sName.contains("aptitude test") || sName.contains("technical test")
+                || sName.contains("aptitude & reasoning") || sName.contains("technical assessment")
+                || sCode.contains("APT") || sCode.contains("TEC")
+                || sCode.equals("APTITUDE") || sCode.equals("TECHNICAL_TEST"))) {
+            return (mainDepartment != null && !mainDepartment.isBlank()) ? mainDepartment : "Computer Science Engineering";
+        }
+
+        // 1. Mathematics
+        if (sName.contains("mathematics") || sName.contains("discrete math") || sName.contains("calculus")
+                || sName.contains("linear algebra") || sName.contains("probability") || sName.contains("statistics")
+                || sName.contains("numerical methods") || sName.contains("transform techniques")
+                || sName.contains("discrete structures") || sCode.contains("MAB") || sCode.contains("MAT")
+                || sCode.contains("MA3") || sCode.contains("MA2") || sCode.contains("MA1")) {
+            return "Mathematics";
+        }
+
+        // 2. Physics
+        if (sName.contains("physics") || sName.contains("semiconductor") || sName.contains("quantum")
+                || sName.contains("optics") || sName.contains("electromagnet")
+                || sCode.contains("PHY") || sCode.contains("PH3") || sCode.contains("PH2") || sCode.contains("PH1")) {
+            return "Physics";
+        }
+
+        // 3. Chemistry
+        if (sName.contains("chemistry") || sName.contains("environmental") || sName.contains("polymer")
+                || sName.contains("organic") || sName.contains("inorganic")
+                || sCode.contains("CHY") || sCode.contains("CHE") || sCode.contains("CH3") || sCode.contains("CH1")) {
+            return "Chemistry";
+        }
+
+        // 4. English / Humanities
+        if (sName.contains("english") || sName.contains("communication") || sName.contains("technical english")
+                || sName.contains("professional communication") || sName.contains("soft skill")
+                || sCode.contains("ENG") || sCode.contains("EN3") || sCode.contains("EN1")) {
+            return "English";
+        }
+
+        // 5. Default to the main department selected (e.g. Computer Science Engineering, AI and Data Science, etc.)
+        return (mainDepartment != null && !mainDepartment.isBlank()) ? mainDepartment : "Computer Science Engineering";
+    }
+
     private Map<String, Object> buildSubjectMap(String code, String name, double theory, double lab, double tut, Integer semester, String department) {
         double weeklyHours = theory * 1.0 + lab * 2.0 + tut * 1.0;
         boolean isLab = lab > 0.0;
         String type = isLab && theory > 0 ? "THEORY_AND_LAB" : (isLab ? "LAB" : (tut > 0 ? "TUTORIAL" : "THEORY"));
+
+        String proposedFacultyDept = classifyFacultyDepartment(code, name, semester, department);
 
         Map<String, Object> item = new HashMap<>();
         item.put("subjectCode", code.toUpperCase());
@@ -1145,7 +1198,9 @@ public class PdfExtractionService {
         item.put("requiresLab", isLab);
         item.put("labDuration", isLab ? 2 : null);
         item.put("semester", semester != null ? semester : 5);
-        item.put("department", department != null ? department : "CSE");
+        item.put("department", department != null ? department : "Computer Science Engineering");
+        item.put("facultyDepartment", proposedFacultyDept);
+        item.put("proposedFacultyDepartment", proposedFacultyDept);
         return item;
     }
 
@@ -1200,6 +1255,38 @@ public class PdfExtractionService {
                 startDate = detectedDates.get(0);
                 endDate = detectedDates.get(detectedDates.size() - 1);
             }
+
+            // Extract academic events, assessments, holidays, and vacations line-by-line
+            List<Map<String, Object>> events = new ArrayList<>();
+            Pattern eventLinePattern = Pattern.compile("(?i)(\\b[0-3]?[0-9][./-][0-1]?[0-9][./-]202[0-9]\\b)(?:\\s*[-–to]{1,4}\\s*(\\b[0-3]?[0-9][./-][0-1]?[0-9][./-]202[0-9]\\b))?\\s*[-–:]?\\s*(.+)");
+            for (String line : rawText.split("\\r?\\n")) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty()) continue;
+                Matcher em = eventLinePattern.matcher(trimmed);
+                if (em.find()) {
+                    LocalDate d1 = parseDateSafe(em.group(1));
+                    String eventDesc = em.group(3) != null ? em.group(3).trim() : "";
+                    if (d1 != null && !eventDesc.isBlank() && eventDesc.length() >= 3) {
+                        String lowerDesc = eventDesc.toLowerCase();
+                        String type = "COLLEGE";
+                        if (lowerDesc.contains("internal") || lowerDesc.contains("unit test") || lowerDesc.contains("assessment") || lowerDesc.contains("exam")) {
+                            type = "ASSESSMENT";
+                        } else if (lowerDesc.contains("holiday") || lowerDesc.contains("jayanthi") || lowerDesc.contains("diwali") || lowerDesc.contains("pongal") || lowerDesc.contains("independence") || lowerDesc.contains("republic")) {
+                            type = "GOVERNMENT";
+                        } else if (lowerDesc.contains("vacation") || lowerDesc.contains("recess")) {
+                            type = "VACATION";
+                        }
+                        Map<String, Object> ev = new HashMap<>();
+                        ev.put("date", d1.toString());
+                        ev.put("name", eventDesc);
+                        ev.put("type", type);
+                        ev.put("description", eventDesc);
+                        events.add(ev);
+                    }
+                }
+            }
+            result.put("holidays", events);
+            result.put("events", events);
         }
 
         // Fallback default semester dates if not extracted
@@ -1223,7 +1310,7 @@ public class PdfExtractionService {
     }
 
     /**
-     * Parses Syllabus Units & Topics from text or PDF.
+     * Parses Syllabus Units & Topics from text or PDF across all pages.
      */
     public List<Map<String, Object>> parseSyllabusUnits(String rawText) {
         List<Map<String, Object>> units = new ArrayList<>();
@@ -1231,16 +1318,18 @@ public class PdfExtractionService {
             return units;
         }
 
-        // Match unit boundaries like "UNIT I", "UNIT 1", "UNIT-1", "MODULE 1"
-        Pattern unitHeaderPattern = Pattern.compile("(?i)\\b(?:UNIT|MODULE)\\s*[-–:]?\\s*([IVXLCDM]+|[0-9]+)\\s*[-–:]?\\s*([^\n\r]+)?");
+        // Match unit boundaries like "UNIT I", "UNIT 1", "UNIT-1", "MODULE 1", "CHAPTER 1", "EXPERIMENT 1"
+        Pattern unitHeaderPattern = Pattern.compile("(?i)\\b(?:UNIT|MODULE|CHAPTER|PART|EXPERIMENT)\\s*[-–:]?\\s*([IVXLCDM]+|[0-9]+)\\s*[-–:]?\\s*([^\n\r]+)?");
         Matcher matcher = unitHeaderPattern.matcher(rawText);
 
         List<Integer> matchStarts = new ArrayList<>();
         List<Integer> unitNums = new ArrayList<>();
         List<String> unitTitles = new ArrayList<>();
+        List<String> sessionTypes = new ArrayList<>();
 
         while (matcher.find()) {
             matchStarts.add(matcher.start());
+            String matchedPrefix = matcher.group(0).toUpperCase();
             String numStr = matcher.group(1).trim().toUpperCase();
             int uNum;
             try {
@@ -1251,6 +1340,7 @@ public class PdfExtractionService {
             unitNums.add(uNum > 0 ? uNum : unitNums.size() + 1);
             String title = matcher.group(2) != null ? matcher.group(2).trim().replaceAll("^[-–:\\s]+", "") : ("Unit " + (unitNums.size() + 1));
             unitTitles.add(title);
+            sessionTypes.add(matchedPrefix.contains("EXPERIMENT") ? "LAB" : "THEORY");
         }
 
         for (int i = 0; i < matchStarts.size(); i++) {
@@ -1273,11 +1363,16 @@ public class PdfExtractionService {
                 if (line.isEmpty() || line.toLowerCase().startsWith("unit") || line.toLowerCase().startsWith("module") || line.length() < 3) {
                     continue;
                 }
+                // Filter out repeated headers and page numbers
+                if (line.matches("(?i)^(?:page\\s+\\d+|anna\\s+university|regulation\\s+\\d+|department\\s+of).*")) {
+                    continue;
+                }
                 // Split subtopics by comma, semicolon, bullet, or period
                 String[] subtopics = line.split("[,;•–]|\\s{2,}");
                 for (String st : subtopics) {
                     String clean = st.trim().replaceAll("^[0-9]+[.)]\\s*", "");
-                    if (clean.length() >= 3 && !clean.toLowerCase().startsWith("total") && !clean.toLowerCase().startsWith("hours")) {
+                    if (clean.length() >= 3 && !clean.toLowerCase().startsWith("total") && !clean.toLowerCase().startsWith("hours")
+                            && !clean.toLowerCase().startsWith("periods") && !clean.toLowerCase().startsWith("credits")) {
                         topics.add(clean);
                     }
                 }
@@ -1287,16 +1382,284 @@ public class PdfExtractionService {
                 topics.add(unitTitles.get(i).isEmpty() ? ("Core concepts for Unit " + unitNums.get(i)) : unitTitles.get(i));
             }
 
+            String finalTitle = unitTitles.get(i);
+            if ((finalTitle == null || finalTitle.trim().isEmpty() || finalTitle.trim().equalsIgnoreCase("Unit " + unitNums.get(i))) && !topics.isEmpty()) {
+                // If title was on next line or not caught by header pattern, infer from first line of section
+                String[] sLines = sectionText.split("\\r?\\n");
+                for (int l = 1; l < Math.min(sLines.length, 3); l++) {
+                    String cand = sLines[l].trim();
+                    if (!cand.isEmpty() && !cand.toLowerCase().startsWith("hours") && !cand.toLowerCase().startsWith("periods") && cand.length() >= 3) {
+                        finalTitle = cand.replaceAll("^[-–:\\s]+", "").replaceAll("(?i)\\s*[0-9]+\\s*(?:hours|periods|hrs).*$", "").trim();
+                        break;
+                    }
+                }
+            }
+
             Map<String, Object> uMap = new HashMap<>();
-            uMap.put("sessionType", "THEORY");
+            uMap.put("sessionType", sessionTypes.get(i));
             uMap.put("unitNumber", unitNums.get(i));
-            uMap.put("title", unitTitles.get(i).isEmpty() ? ("Unit " + unitNums.get(i)) : unitTitles.get(i));
+            uMap.put("title", (finalTitle != null && !finalTitle.trim().isEmpty()) ? finalTitle.trim() : ("Unit " + unitNums.get(i)));
             uMap.put("periodsAllotted", periods);
             uMap.put("topics", topics);
             units.add(uMap);
         }
 
         return units;
+    }
+
+    /**
+     * Reads the syllabus document line-by-line to extract Course Objectives.
+     */
+    public List<Map<String, Object>> parseCourseObjectives(String rawText) {
+        List<Map<String, Object>> objectives = new ArrayList<>();
+        if (rawText == null || rawText.trim().isEmpty()) return objectives;
+
+        String[] lines = rawText.split("\\r?\\n");
+        boolean inObjectives = false;
+        StringBuilder currentDesc = new StringBuilder();
+        int seqNum = 1;
+
+        Pattern objHeader = Pattern.compile("(?i)^\\s*(?:COURSE\\s+OBJECTIVES?|OBJECTIVES?|PROGRAM\\s+EDUCATIONAL\\s+OBJECTIVES?)\\s*[:–-]?\\s*$");
+        Pattern nextSection = Pattern.compile("(?i)^\\s*(?:UNIT\\s*[-–:]?\\s*[IVX0-9]+|MODULE\\s*[-–:]?\\s*[0-9]+|COURSE\\s+OUTCOMES?|OUTCOMES?|SYLLABUS|COURSE\\s+CONTENT|TEXT\\s*BOOKS?|REFERENCES?)\\b.*");
+        Pattern itemStart = Pattern.compile("^(?:(?:[0-9]{1,2}[.)]|\\[[0-9]{1,2}\\]|\\([0-9]{1,2}\\)|[a-zA-Z][.)]|•|–|-)\\s*)?(To\\s+.*|Understand\\s+.*|Introduce\\s+.*|Learn\\s+.*|Develop\\s+.*|Provide\\s+.*|Equip\\s+.*|Familiarize\\s+.*|Enable\\s+.*|Impart\\s+.*|Gain\\s+.*|Study\\s+.*)", Pattern.CASE_INSENSITIVE);
+
+        for (String rawLine : lines) {
+            String line = rawLine.trim();
+            if (line.isEmpty()) continue;
+
+            if (objHeader.matcher(line).find() || line.equalsIgnoreCase("COURSE OBJECTIVES:") || line.equalsIgnoreCase("OBJECTIVES:")
+                    || line.toLowerCase().contains("course objectives")) {
+                inObjectives = true;
+                continue;
+            }
+
+            if (inObjectives) {
+                if (nextSection.matcher(line).find() && !line.toLowerCase().contains("objective")) {
+                    inObjectives = false;
+                    if (currentDesc.length() > 0) {
+                        Map<String, Object> map = new HashMap<>();
+                        map.put("sequenceNumber", seqNum++);
+                        map.put("description", currentDesc.toString().trim());
+                        objectives.add(map);
+                        currentDesc.setLength(0);
+                    }
+                    break;
+                }
+
+                Matcher m = itemStart.matcher(line);
+                boolean isNumbered = line.matches("^[0-9]{1,2}[.)]\\s+.*") || line.matches("^[•–-]\\s+.*");
+
+                if (m.matches() || isNumbered) {
+                    if (currentDesc.length() > 0) {
+                        Map<String, Object> map = new HashMap<>();
+                        map.put("sequenceNumber", seqNum++);
+                        map.put("description", currentDesc.toString().trim());
+                        objectives.add(map);
+                        currentDesc.setLength(0);
+                    }
+                    String clean = line.replaceAll("^(?:[0-9]{1,2}[.)]|\\[[0-9]{1,2}\\]|\\([0-9]{1,2}\\)|[•–-]\\s*)", "").trim();
+                    currentDesc.append(clean);
+                } else if (currentDesc.length() > 0 && !line.toLowerCase().startsWith("page ") && line.length() > 3) {
+                    currentDesc.append(" ").append(line);
+                }
+            }
+        }
+
+        if (currentDesc.length() > 0) {
+            Map<String, Object> map = new HashMap<>();
+            map.put("sequenceNumber", seqNum++);
+            map.put("description", currentDesc.toString().trim());
+            objectives.add(map);
+        }
+
+        return objectives;
+    }
+
+    /**
+     * Reads the syllabus document line-by-line to extract Course Outcomes (CO1..COn).
+     */
+    public List<Map<String, Object>> parseCourseOutcomes(String rawText) {
+        List<Map<String, Object>> outcomes = new ArrayList<>();
+        if (rawText == null || rawText.trim().isEmpty()) return outcomes;
+
+        String[] lines = rawText.split("\\r?\\n");
+        boolean inOutcomes = false;
+        StringBuilder currentDesc = new StringBuilder();
+        int currentCoNum = 1;
+
+        Pattern outcomeHeader = Pattern.compile("(?i)^\\s*(?:COURSE\\s+OUTCOMES?|OUTCOMES?|COURSE\\s+OUTCOMES?\\s*\\(COS?\\)|UPON\\s+COMPLETION.*STUDENTS.*ABLE\\s+TO|AT\\s+THE\\s+END.*STUDENTS.*ABLE\\s+TO)\\s*[:–-]?\\s*$");
+        Pattern nextSection = Pattern.compile("(?i)^\\s*(?:TEXT\\s*BOOKS?|REFERENCES?|REFERENCE\\s+BOOKS?|CO[-–\\s]*PO\\s+MAPPING|PO\\s+MAPPING|ARTICULATION\\s+MATRIX|WEB\\s+REFERENCES?)\\b.*");
+        Pattern coLinePattern = Pattern.compile("(?i)^\\s*(?:CO\\s*[-–:]?\\s*([0-9]{1,2})|[0-9]{1,2}[.)]|•|–|-)\\s*[:–-]?\\s*(.*)$");
+
+        for (String rawLine : lines) {
+            String line = rawLine.trim();
+            if (line.isEmpty()) continue;
+
+            // Direct check for CO1, CO2, etc. even if heading wasn't strictly matched
+            Matcher directCo = Pattern.compile("(?i)^\\s*CO\\s*[-–:]?\\s*([1-9])\\s*[:–-]\\s*(.*)$").matcher(line);
+            if (directCo.matches()) {
+                if (currentDesc.length() > 0) {
+                    Map<String, Object> map = new HashMap<>();
+                    map.put("coNumber", currentCoNum);
+                    map.put("description", currentDesc.toString().trim());
+                    outcomes.add(map);
+                    currentDesc.setLength(0);
+                }
+                currentCoNum = Integer.parseInt(directCo.group(1));
+                currentDesc.append(directCo.group(2).trim());
+                inOutcomes = true;
+                continue;
+            }
+
+            if (outcomeHeader.matcher(line).find() || line.toLowerCase().contains("course outcomes")
+                    || line.toLowerCase().contains("students will be able to")) {
+                inOutcomes = true;
+                continue;
+            }
+
+            if (inOutcomes) {
+                if (nextSection.matcher(line).find() && !line.toLowerCase().contains("outcome")) {
+                    inOutcomes = false;
+                    if (currentDesc.length() > 0) {
+                        Map<String, Object> map = new HashMap<>();
+                        map.put("coNumber", currentCoNum);
+                        map.put("description", currentDesc.toString().trim());
+                        outcomes.add(map);
+                        currentDesc.setLength(0);
+                    }
+                    break;
+                }
+
+                Matcher coMatcher = coLinePattern.matcher(line);
+                if (coMatcher.matches()) {
+                    if (currentDesc.length() > 0) {
+                        Map<String, Object> map = new HashMap<>();
+                        map.put("coNumber", currentCoNum);
+                        map.put("description", currentDesc.toString().trim());
+                        outcomes.add(map);
+                        currentDesc.setLength(0);
+                    }
+
+                    if (coMatcher.group(1) != null) {
+                        currentCoNum = Integer.parseInt(coMatcher.group(1));
+                    } else {
+                        currentCoNum = outcomes.size() + 1;
+                    }
+                    currentDesc.append(coMatcher.group(2).trim());
+                } else if (currentDesc.length() > 0 && !line.toLowerCase().startsWith("page ") && line.length() > 3) {
+                    currentDesc.append(" ").append(line);
+                }
+            }
+        }
+
+        if (currentDesc.length() > 0) {
+            Map<String, Object> map = new HashMap<>();
+            map.put("coNumber", currentCoNum);
+            map.put("description", currentDesc.toString().trim());
+            outcomes.add(map);
+        }
+
+        return outcomes;
+    }
+
+    /**
+     * Analyses an entire syllabus document, extracts text across all pages,
+     * identifies subjects and unit structures, course objectives and outcomes,
+     * and provides validation metrics.
+     */
+    public Map<String, Object> analyzeSyllabusDocument(MultipartFile file, Subject targetSubject) throws IOException {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("The uploaded file is empty or missing.");
+        }
+
+        int totalPages = 1;
+        String rawText = "";
+        String fileName = file.getOriginalFilename() != null ? file.getOriginalFilename() : "";
+
+        if (fileName.toLowerCase().endsWith(".pdf") || (file.getContentType() != null && file.getContentType().toLowerCase().contains("pdf"))) {
+            try (PDDocument document = Loader.loadPDF(file.getBytes())) {
+                if (document.isEncrypted()) {
+                    throw new IllegalArgumentException("The uploaded PDF is password protected.");
+                }
+                totalPages = document.getNumberOfPages();
+                PDFTextStripper stripper = new PDFTextStripper();
+                stripper.setSortByPosition(true);
+                rawText = stripper.getText(document);
+            }
+        } else {
+            rawText = new String(file.getBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+
+        List<Map<String, Object>> parsedUnits = parseSyllabusUnits(rawText);
+        List<Map<String, Object>> parsedObjectives = parseCourseObjectives(rawText);
+        List<Map<String, Object>> parsedOutcomes = parseCourseOutcomes(rawText);
+
+        // Subject identification
+        Set<String> identifiedSubjects = new LinkedHashSet<>();
+        if (targetSubject != null) {
+            identifiedSubjects.add(targetSubject.getSubjectCode() + " — " + targetSubject.getSubjectName());
+        }
+
+        Matcher codeMatcher = Pattern.compile("\\b([A-Z]{2,4}\\s*[-_]?\\s*[0-9]{3,5})\\b").matcher(rawText != null ? rawText : "");
+        while (codeMatcher.find()) {
+            String foundCode = codeMatcher.group(1).replaceAll("\\s+", "");
+            if (targetSubject != null && targetSubject.getSubjectCode() != null
+                    && targetSubject.getSubjectCode().replaceAll("\\s+", "").equalsIgnoreCase(foundCode)) {
+                // target already matched
+            } else if (foundCode.length() >= 5) {
+                identifiedSubjects.add(foundCode);
+            }
+        }
+
+        // Count total topics and compile validation warnings
+        int totalTopicsCount = 0;
+        List<String> reviewWarnings = new ArrayList<>();
+
+        if (rawText == null || rawText.trim().length() < 50) {
+            reviewWarnings.add("Document contains very little selectable text. File may be scanned or image-based.");
+        }
+
+        if (parsedUnits.isEmpty()) {
+            reviewWarnings.add("No distinct Units or Modules could be identified. Check document structure.");
+        } else {
+            Set<Integer> unitNumbersSeen = new HashSet<>();
+            for (Map<String, Object> u : parsedUnits) {
+                Integer uNum = (Integer) u.get("unitNumber");
+                if (uNum != null) unitNumbersSeen.add(uNum);
+                @SuppressWarnings("unchecked")
+                List<String> topics = (List<String>) u.getOrDefault("topics", Collections.emptyList());
+                totalTopicsCount += topics.size();
+                if (topics.isEmpty()) {
+                    reviewWarnings.add("Unit " + uNum + " has no sub-topics identified.");
+                }
+            }
+            if (!unitNumbersSeen.isEmpty()) {
+                int maxUnit = Collections.max(unitNumbersSeen);
+                for (int u = 1; u <= maxUnit; u++) {
+                    if (!unitNumbersSeen.contains(u)) {
+                        reviewWarnings.add("Unit " + u + " was not found in sequence (found " + unitNumbersSeen + ").");
+                    }
+                }
+            }
+        }
+
+        if (totalPages > 2 && parsedUnits.size() < 3) {
+            reviewWarnings.add("Document has " + totalPages + " pages, but only " + parsedUnits.size() + " unit(s) were identified. Check if later pages have additional content.");
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("totalPagesProcessed", totalPages);
+        result.put("subjectsIdentified", new ArrayList<>(identifiedSubjects));
+        result.put("unitsIdentified", parsedUnits.size());
+        result.put("topicsExtracted", totalTopicsCount);
+        result.put("objectivesIdentified", parsedObjectives.size());
+        result.put("outcomesIdentified", parsedOutcomes.size());
+        result.put("reviewWarnings", reviewWarnings);
+        result.put("units", parsedUnits);
+        result.put("courseObjectives", parsedObjectives);
+        result.put("courseOutcomes", parsedOutcomes);
+        result.put("fileName", fileName);
+        return result;
     }
 
     private LocalDate parseDateSafe(String val) {

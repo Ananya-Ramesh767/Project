@@ -2,9 +2,13 @@ import React, { useState, useEffect } from 'react';
 import {
   Users, Plus, Edit2, Trash2, Calendar, Clock, Check, X, Star,
   AlertCircle, Upload, FileText, Sparkles, ChevronDown, ChevronUp,
-  UserCheck, AlertTriangle, BookOpen, UserPlus
+  UserCheck, AlertTriangle, BookOpen, UserPlus, ShieldAlert
 } from 'lucide-react';
-import { INSTITUTIONAL_PROGRAMMES } from '../utils/programmes';
+import { FACULTY_DEPARTMENTS, MAIN_INSTITUTIONAL_PROGRAMMES } from '../utils/programmes';
+// Faculty Master uses FACULTY_DEPARTMENTS (all 21 departments including Math, Physics, Chemistry, English)
+// Other modules use MAIN_INSTITUTIONAL_PROGRAMMES (only the 17 main departments)
+const INSTITUTIONAL_PROGRAMMES = FACULTY_DEPARTMENTS;
+import { SEMESTER_OPTIONS, getStoredAcademicContext, setStoredAcademicContext } from '../utils/academicContext';
 
 const DAYS = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY'];
 const PERIODS = [1, 2, 3, 4, 5, 6, 7, 8];
@@ -19,9 +23,10 @@ export default function FacultyManagementPage({ user }) {
   const [showModal, setShowModal] = useState(false);
   const [editId, setEditId] = useState(null);
 
-  // Filter / Department
-  const [filterDept, setFilterDept] = useState(INSTITUTIONAL_PROGRAMMES[4]); // Default CSE
-  const [filterSemester, setFilterSemester] = useState('ALL');
+  // Filter / Department synced with academicContext
+  const initialContext = getStoredAcademicContext();
+  const [filterDept, setFilterDept] = useState(() => initialContext.department || INSTITUTIONAL_PROGRAMMES[4]);
+  const [filterSemester, setFilterSemester] = useState(() => initialContext.semester || 'ALL');
 
   // Auto-Assign State
   const [autoAssigning, setAutoAssigning] = useState(false);
@@ -47,7 +52,7 @@ export default function FacultyManagementPage({ user }) {
   // PDF Upload state
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadFile, setUploadFile] = useState(null);
-  const [uploadDept, setUploadDept] = useState(INSTITUTIONAL_PROGRAMMES[4]);
+  const [uploadDept, setUploadDept] = useState(() => initialContext.department || INSTITUTIONAL_PROGRAMMES[4]);
   const [uploadLoading, setUploadLoading] = useState(false);
   const [parsedFaculty, setParsedFaculty] = useState([]);
   const [uploadError, setUploadError] = useState('');
@@ -64,10 +69,11 @@ export default function FacultyManagementPage({ user }) {
     employeeId: '',
     name: '',
     email: '',
-    department: INSTITUTIONAL_PROGRAMMES[4],
+    department: initialContext.department || INSTITUTIONAL_PROGRAMMES[4],
     designation: 'Assistant Professor',
     specialization: '',
     maxWeeklyLoad: 18,
+    hod: false,
     subjectIds: []
   });
 
@@ -489,6 +495,7 @@ export default function FacultyManagementPage({ user }) {
       designation: f.designation || 'Assistant Professor',
       specialization: f.specialization || '',
       maxWeeklyLoad: f.maxWeeklyLoad || 18,
+      hod: Boolean(f.hod || (f.designation && f.designation.toLowerCase().includes('hod'))),
       subjectIds: f.eligibleSubjects ? f.eligibleSubjects.map(s => s.id) : []
     });
     setShowModal(true);
@@ -533,8 +540,12 @@ export default function FacultyManagementPage({ user }) {
         setUploadError('Unable to automatically extract faculty records from this document. You can add them manually.');
         setParsedFaculty([]);
       } else {
-        setParsedFaculty(data.preview);
-        setUploadSuccess(`Extracted ${data.preview.length} faculty members! Review and edit details below before saving.`);
+        const enriched = (data.preview || []).map(f => ({
+          ...f,
+          hod: Boolean(f.hod || (f.designation && f.designation.toLowerCase().includes('hod')))
+        }));
+        setParsedFaculty(enriched);
+        setUploadSuccess(`Extracted ${enriched.length} faculty members! Review and edit details below before saving.`);
       }
     } catch (err) {
       setUploadError(err.message);
@@ -550,13 +561,18 @@ export default function FacultyManagementPage({ user }) {
     setUploadSuccess('');
 
     try {
+      const payload = parsedFaculty.map(f => ({
+        ...f,
+        hod: Boolean(f.hod || (f.designation && f.designation.toLowerCase().includes('hod')))
+      }));
+
       const res = await fetch('/api/admin/faculty/batch-save', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${user.token}`
         },
-        body: JSON.stringify(parsedFaculty)
+        body: JSON.stringify(payload)
       });
 
       if (!res.ok) {
@@ -565,21 +581,16 @@ export default function FacultyManagementPage({ user }) {
       }
 
       const result = await res.json();
-      setUploadSuccess(`✅ Successfully imported ${result.savedCount} faculty members into Faculty Master!`);
-
-      setTimeout(() => {
-        setShowUploadModal(false);
-        setParsedFaculty([]);
-        setUploadFile(null);
-        setUploadSuccess('');
-        // Automatically switch to subject assignment tab for the uploaded department
-        setFilterDept(uploadDept);
-        setActiveTab('assignment');
-        fetchProposals(uploadDept);
-      }, 1500);
+      setShowUploadModal(false);
+      setParsedFaculty([]);
+      setUploadFile(null);
+      setAssignmentSuccessMsg(`✅ Successfully imported ${result.savedCount} faculty members into Faculty Master!`);
+      setFilterDept(uploadDept);
+      setStoredAcademicContext({ department: uploadDept });
 
       fetchFaculty();
       fetchWorkloads();
+      fetchProposals(uploadDept);
     } catch (err) {
       setUploadError(err.message);
     } finally {
@@ -1311,9 +1322,16 @@ export default function FacultyManagementPage({ user }) {
                           </div>
                         </td>
                         <td>
-                          <span className={`badge ${f.active ? 'badge-success' : 'badge-danger'}`}>
-                            {f.active ? 'Active' : 'Inactive'}
-                          </span>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            <span className={`badge ${f.active ? 'badge-success' : 'badge-danger'}`}>
+                              {f.active ? 'Active' : 'Inactive'}
+                            </span>
+                            {Boolean(f.hod || (f.designation && f.designation.toLowerCase().includes('hod'))) && (
+                              <span className="badge badge-warning" style={{ fontSize: '0.65rem' }}>
+                                HOD (Excluded)
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td>
                           <div style={{ display: 'flex', gap: '0.4rem' }}>
@@ -1423,6 +1441,19 @@ export default function FacultyManagementPage({ user }) {
                     onChange={e => setForm({ ...form, specialization: e.target.value })}
                   />
                 </div>
+              </div>
+
+              <div className="form-group" style={{ marginTop: '0.75rem', background: 'rgba(239, 68, 68, 0.08)', padding: '0.65rem 0.85rem', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.25)', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <input
+                  type="checkbox"
+                  id="formHodCheckbox"
+                  checked={form.hod || false}
+                  onChange={e => setForm({ ...form, hod: e.target.checked })}
+                  style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                />
+                <label htmlFor="formHodCheckbox" style={{ margin: 0, fontSize: '0.85rem', cursor: 'pointer', fontWeight: 600, color: '#fca5a5' }}>
+                  Head of Department (HOD) — Exclude from regular class teaching assignments
+                </label>
               </div>
 
               <div className="form-group" style={{ marginTop: '1rem' }}>
@@ -1535,15 +1566,16 @@ export default function FacultyManagementPage({ user }) {
                 </div>
 
                 <div className="data-table-container" style={{ maxHeight: '320px', overflowY: 'auto', marginBottom: '1.25rem' }}>
-                  <table className="data-table">
+                  <table className="data-table" style={{ minWidth: '980px' }}>
                     <thead>
                       <tr>
-                        <th>Emp ID</th>
-                        <th>Name</th>
-                        <th>Designation / Specialization</th>
-                        <th>Department</th>
-                        <th>Max Load</th>
-                        <th>Actions</th>
+                        <th style={{ minWidth: '110px' }}>Emp ID</th>
+                        <th style={{ minWidth: '260px' }}>Full Name</th>
+                        <th style={{ minWidth: '200px' }}>Designation / Specialization</th>
+                        <th style={{ minWidth: '200px' }}>Department</th>
+                        <th style={{ minWidth: '140px', textAlign: 'center' }}>HOD (Non-Teaching)</th>
+                        <th style={{ minWidth: '90px', textAlign: 'center' }}>Max Load</th>
+                        <th style={{ minWidth: '80px', textAlign: 'center' }}>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1566,8 +1598,9 @@ export default function FacultyManagementPage({ user }) {
                             <input
                               type="text"
                               className="form-input"
-                              style={{ padding: '0.2rem 0.4rem', fontSize: '0.8rem' }}
+                              style={{ padding: '0.2rem 0.4rem', fontSize: '0.8rem', minWidth: '250px', width: '100%' }}
                               value={f.name || ''}
+                              placeholder="Full faculty name (e.g. Dr. K. Ramanathan)"
                               onChange={e => {
                                 const copy = [...parsedFaculty];
                                 copy[idx].name = e.target.value;
@@ -1618,6 +1651,19 @@ export default function FacultyManagementPage({ user }) {
                                 <option key={prog} value={prog}>{prog}</option>
                               ))}
                             </select>
+                          </td>
+                          <td style={{ textAlign: 'center' }}>
+                            <input
+                              type="checkbox"
+                              style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                              title="Head of Department (HOD) — Excludes from regular teaching class allocations"
+                              checked={Boolean(f.hod || (f.designation && f.designation.toLowerCase().includes('hod')))}
+                              onChange={e => {
+                                const copy = [...parsedFaculty];
+                                copy[idx].hod = e.target.checked;
+                                setParsedFaculty(copy);
+                              }}
+                            />
                           </td>
                           <td>
                             <input

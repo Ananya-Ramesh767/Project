@@ -37,6 +37,7 @@ public class LessonPlanGenerationService {
     private final LessonPlanRepository lessonPlanRepository;
     private final LessonPlanSessionRepository lessonPlanSessionRepository;
     private final CollegeTimeslotRepository timeslotRepository;
+    private final com.odysseus.backend.repository.TimetableAssignmentRepository assignmentRepository;
 
     /** Thrown for validation failures the controller should surface as 400. */
     public static class GenerationException extends RuntimeException {
@@ -156,7 +157,34 @@ public class LessonPlanGenerationService {
 
     Map<String, List<DayOfWeek>> computeWeekdayPatterns(SubjectOffering subjectOffering, Subject subject) {
         Map<String, List<DayOfWeek>> patterns = new HashMap<>();
-        int startIndex = Math.floorMod(subjectOffering.getId(), AVAILABLE_WEEKDAYS.size());
+
+        // Check if an approved timetable exists for this offering's batch and subject
+        if (subjectOffering.getBatch() != null && subjectOffering.getSubject() != null) {
+            List<com.odysseus.backend.domain.TimetableAssignment> timetableList =
+                    assignmentRepository.findByBatchIdAndActiveTrue(subjectOffering.getBatch().getId());
+            List<DayOfWeek> timetableDays = timetableList.stream()
+                    .filter(a -> a.getSubject() != null && java.util.Objects.equals(a.getSubject().getId(), subject.getId()))
+                    .map(a -> {
+                        try {
+                            return DayOfWeek.valueOf(a.getDayOfWeek().toUpperCase());
+                        } catch (Exception e) {
+                            return null;
+                        }
+                    })
+                    .filter(java.util.Objects::nonNull)
+                    .distinct()
+                    .collect(Collectors.toList());
+
+            if (!timetableDays.isEmpty()) {
+                patterns.put("THEORY", timetableDays);
+                patterns.put("LAB", timetableDays);
+                patterns.put("PROJECT", timetableDays);
+                patterns.put("TUTORIAL", timetableDays);
+                return patterns;
+            }
+        }
+
+        int startIndex = Math.floorMod(subjectOffering.getId() != null ? subjectOffering.getId() : 1L, AVAILABLE_WEEKDAYS.size());
 
         patterns.put("THEORY", pickWeekdays(startIndex, subject.getWeeklyLecturePeriods(), 1, 0));
         if (subject.isRequiresLab()) {

@@ -155,19 +155,27 @@ export default function AdminDashboard({ user }) {
               <select
                 id="sem-select"
                 className="form-select"
-                style={{ padding: '0.4rem 0.85rem', fontSize: '0.85rem', minWidth: '160px' }}
+                style={{ padding: '0.4rem 0.85rem', fontSize: '0.85rem', minWidth: '220px' }}
                 value={selectedSemester}
                 onChange={e => handleSemesterChange(e.target.value)}
               >
                 <option value="">Select Semester</option>
-                {[1, 2, 3, 4, 5, 6, 7, 8].map(sem => (
-                  <option key={sem} value={sem}>Semester {sem}</option>
-                ))}
+                <option value="1">Sem 1 — Odd Semester</option>
+                <option value="2">Sem 2 — Even Semester</option>
+                <option value="3">Sem 3 — Odd Semester</option>
+                <option value="4">Sem 4 — Even Semester</option>
+                <option value="5">Sem 5 — Odd Semester</option>
+                <option value="6">Sem 6 — Even Semester</option>
+                <option value="7">Sem 7 — Odd Semester</option>
+                <option value="8">Sem 8 — Even Semester</option>
               </select>
             </div>
           </div>
 
-          <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <span className="badge badge-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.78rem' }}>
+              Calendar Cycle: {new Date().getMonth() >= 6 ? 'Odd Semester (Jul–Dec)' : (new Date().getMonth() <= 4 ? 'Even Semester (Jan–May)' : 'Transition (Jun)')}
+            </span>
             {selectedDept && selectedSemester ? (
               <span className="badge badge-success" style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}>
                 Active Context: {selectedDept} — Sem {selectedSemester}

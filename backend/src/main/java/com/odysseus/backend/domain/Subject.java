@@ -25,6 +25,8 @@ public class Subject {
     @Column(nullable = false)
     private String department;
 
+    private String facultyDepartment;
+
     private Integer semester;
 
     @Builder.Default

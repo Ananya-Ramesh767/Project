@@ -29,7 +29,22 @@ public class DataInitializer implements CommandLineRunner {
     private final CollegeTimeslotRepository timeslotRepository;
     private final CalendarHolidayRepository holidayRepository;
     private final AcademicCalendarRepository calendarRepository;
+    private final BatchRepository batchRepository;
     private final PasswordEncoder passwordEncoder;
+    private final javax.sql.DataSource dataSource;
+
+    @jakarta.annotation.PostConstruct
+    public void migrateSchema() {
+        try (var conn = dataSource.getConnection();
+             var stmt = conn.createStatement()) {
+            stmt.execute("ALTER TABLE faculty ADD COLUMN IF NOT EXISTS hod BOOLEAN DEFAULT FALSE");
+            stmt.execute("UPDATE subjects SET department = 'Computer Science Engineering' WHERE department = '[object Object]'");
+            stmt.execute("UPDATE batches SET department = 'Computer Science Engineering', batch_name = 'CSE-A' WHERE section = 'A' AND department = '[object Object]'");
+            stmt.execute("UPDATE batches SET department = 'Computer Science Engineering', batch_name = 'CSE-B' WHERE section = 'B' AND department = '[object Object]'");
+            stmt.execute("DELETE FROM batches WHERE department = '[object Object]'");
+        } catch (Exception ignored) {
+        }
+    }
 
     @Override
     public void run(String... args) {
@@ -38,6 +53,33 @@ public class DataInitializer implements CommandLineRunner {
         seedCollegeTimeslots();
         seedGovernmentHolidays();
         seedDefaultAcademicCalendar();
+        seedEssentialSections();
+    }
+
+    private void seedEssentialSections() {
+        String dept = "Computer Science Engineering";
+        String academicYear = "2026-2027";
+        int[] semesters = {3, 5};
+        char[] sections = {'A', 'B', 'C', 'D', 'E', 'F', 'G'};
+
+        for (int sem : semesters) {
+            for (char sec : sections) {
+                String secStr = String.valueOf(sec);
+                String batchName = "CSE-" + secStr;
+                boolean exists = batchRepository.findByDepartmentAndSemesterAndSection(dept, sem, secStr).isPresent();
+                if (!exists) {
+                    batchRepository.save(Batch.builder()
+                            .department(dept)
+                            .semester(sem)
+                            .section(secStr)
+                            .batchName(batchName)
+                            .strength(60)
+                            .academicYear(academicYear)
+                            .active(true)
+                            .build());
+                }
+            }
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -173,6 +215,15 @@ public class DataInitializer implements CommandLineRunner {
         addGovtHoliday("2026-11-24", "Guru Nanak Jayanti", "Gazetted Holiday");
         addGovtHoliday("2026-12-25", "Christmas Day", "Gazetted Holiday");
 
+        // 2026 Tamil Nadu State Government Public Holidays
+        addGovtHoliday("2026-01-14", "Pongal", "Tamil Nadu State Public Holiday");
+        addGovtHoliday("2026-01-15", "Thiruvalluvar Day", "Tamil Nadu State Public Holiday");
+        addGovtHoliday("2026-01-16", "Uzhavar Thirunal", "Tamil Nadu State Public Holiday");
+        addGovtHoliday("2026-04-14", "Tamil New Year / Puthandu", "Tamil Nadu State Public Holiday");
+        addGovtHoliday("2026-09-14", "Vinayakar Chathurthi", "Tamil Nadu State Public Holiday");
+        addGovtHoliday("2026-10-19", "Ayutha Pooja / Saraswathi Pooja", "Tamil Nadu State Public Holiday");
+        addGovtHoliday("2026-10-20", "Vijaya Dasami", "Tamil Nadu State Public Holiday");
+
         // 2025 Central Government Holidays
         addGovtHoliday("2025-01-26", "Republic Day", "National Holiday");
         addGovtHoliday("2025-02-26", "Maha Shivratri", "Gazetted Holiday");
@@ -190,6 +241,15 @@ public class DataInitializer implements CommandLineRunner {
         addGovtHoliday("2025-11-05", "Guru Nanak Jayanti", "Gazetted Holiday");
         addGovtHoliday("2025-12-25", "Christmas Day", "Gazetted Holiday");
 
+        // 2025 Tamil Nadu State Government Public Holidays
+        addGovtHoliday("2025-01-14", "Pongal", "Tamil Nadu State Public Holiday");
+        addGovtHoliday("2025-01-15", "Thiruvalluvar Day", "Tamil Nadu State Public Holiday");
+        addGovtHoliday("2025-01-16", "Uzhavar Thirunal", "Tamil Nadu State Public Holiday");
+        addGovtHoliday("2025-04-14", "Tamil New Year / Puthandu", "Tamil Nadu State Public Holiday");
+        addGovtHoliday("2025-08-27", "Vinayakar Chathurthi", "Tamil Nadu State Public Holiday");
+        addGovtHoliday("2025-10-01", "Ayutha Pooja", "Tamil Nadu State Public Holiday");
+        addGovtHoliday("2025-10-02", "Vijaya Dasami", "Tamil Nadu State Public Holiday");
+
         // 2027 Central Government Holidays
         addGovtHoliday("2027-01-26", "Republic Day", "National Holiday");
         addGovtHoliday("2027-03-06", "Maha Shivratri", "Gazetted Holiday");
@@ -202,6 +262,14 @@ public class DataInitializer implements CommandLineRunner {
         addGovtHoliday("2027-10-29", "Diwali", "Gazetted Holiday");
         addGovtHoliday("2027-11-13", "Guru Nanak Jayanti", "Gazetted Holiday");
         addGovtHoliday("2027-12-25", "Christmas Day", "Gazetted Holiday");
+
+        // 2027 Tamil Nadu State Government Public Holidays
+        addGovtHoliday("2027-01-14", "Pongal", "Tamil Nadu State Public Holiday");
+        addGovtHoliday("2027-01-15", "Thiruvalluvar Day", "Tamil Nadu State Public Holiday");
+        addGovtHoliday("2027-01-16", "Uzhavar Thirunal", "Tamil Nadu State Public Holiday");
+        addGovtHoliday("2027-04-14", "Tamil New Year / Puthandu", "Tamil Nadu State Public Holiday");
+        addGovtHoliday("2027-09-04", "Vinayakar Chathurthi", "Tamil Nadu State Public Holiday");
+        addGovtHoliday("2027-10-09", "Ayutha Pooja", "Tamil Nadu State Public Holiday");
     }
 
     private void addGovtHoliday(String dateIso, String name, String description) {

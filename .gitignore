@@ -3,3 +3,8 @@ dist/
 target/
 .env
 *.log
+
+# Local H2 Database files
+*.mv.db
+*.trace.db
+backend/data/*.db

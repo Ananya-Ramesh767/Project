@@ -19,6 +19,11 @@ public class SubjectController {
     private final SubjectRepository subjectRepository;
     private final CreditCalculationService creditCalculationService;
     private final com.odysseus.backend.service.PdfExtractionService pdfExtractionService;
+    private final com.odysseus.backend.repository.SubjectOfferingRepository offeringRepository;
+    private final com.odysseus.backend.repository.TimetableAssignmentRepository assignmentRepository;
+    private final com.odysseus.backend.repository.TimetableEntryRepository entryRepository;
+    private final com.odysseus.backend.repository.FacultyRepository facultyRepository;
+    private final com.odysseus.backend.repository.SyllabusUnitRepository syllabusUnitRepository;
 
     @GetMapping
     public ResponseEntity<List<Subject>> getAllSubjects(
@@ -66,11 +71,43 @@ public class SubjectController {
     }
 
     @DeleteMapping("/{id}")
+    @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<?> deleteSubject(@PathVariable Long id) {
         return subjectRepository.findById(id).map(subject -> {
-            subject.setActive(false);
-            subjectRepository.save(subject);
-            return ResponseEntity.ok(Map.of("message", "Subject deactivated successfully"));
+            // 1. Remove from all subject offerings
+            List<com.odysseus.backend.domain.SubjectOffering> offerings = offeringRepository.findAll().stream()
+                    .filter(o -> o.getSubject() != null && Objects.equals(o.getSubject().getId(), id))
+                    .collect(Collectors.toList());
+            offeringRepository.deleteAll(offerings);
+
+            // 2. Remove timetable assignments
+            List<com.odysseus.backend.domain.TimetableAssignment> assignments = assignmentRepository.findAll().stream()
+                    .filter(a -> a.getSubject() != null && Objects.equals(a.getSubject().getId(), id))
+                    .collect(Collectors.toList());
+            assignmentRepository.deleteAll(assignments);
+
+            // 3. Remove timetable entries
+            List<com.odysseus.backend.domain.TimetableEntry> entries = entryRepository.findAll().stream()
+                    .filter(e -> Objects.equals(e.getSubjectId(), id))
+                    .collect(Collectors.toList());
+            entryRepository.deleteAll(entries);
+
+            // 4. Remove syllabus units
+            List<com.odysseus.backend.domain.SyllabusUnit> units = syllabusUnitRepository.findBySubjectIdAndActiveTrueOrderByUnitNumberAsc(id);
+            syllabusUnitRepository.deleteAll(units);
+
+            // 5. Unlink faculty eligible subjects
+            List<com.odysseus.backend.domain.Faculty> facultyList = facultyRepository.findAll();
+            for (com.odysseus.backend.domain.Faculty f : facultyList) {
+                if (f.getEligibleSubjects() != null && f.getEligibleSubjects().removeIf(s -> Objects.equals(s.getId(), id))) {
+                    facultyRepository.save(f);
+                }
+            }
+
+            // 6. Delete subject record permanently
+            subjectRepository.delete(subject);
+
+            return ResponseEntity.ok(Map.of("message", "Subject [" + subject.getSubjectCode() + "] and related records deleted successfully."));
         }).orElse(ResponseEntity.notFound().build());
     }
 
@@ -143,6 +180,7 @@ public class SubjectController {
                 Subject exist = existing.get();
                 exist.setSubjectName(sub.getSubjectName());
                 exist.setDepartment(sub.getDepartment());
+                exist.setFacultyDepartment(sub.getFacultyDepartment());
                 exist.setSemester(sub.getSemester());
                 exist.setSubjectType(sub.getSubjectType());
                 exist.setTheoryCredits(sub.getTheoryCredits());

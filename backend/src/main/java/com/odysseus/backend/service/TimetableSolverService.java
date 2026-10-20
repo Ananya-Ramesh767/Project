@@ -105,9 +105,11 @@ public class TimetableSolverService {
 
     @Transactional
     public void solve(String jobId) {
-        // 1. Load active data
+        // 1. Load active data (strictly exclude HODs from assignable teaching faculty pool)
         List<SubjectOffering> offerings = offeringRepository.findByActiveTrue();
-        List<Faculty> allFaculty = facultyRepository.findByActiveTrue();
+        List<Faculty> allFaculty = facultyRepository.findByActiveTrue().stream()
+                .filter(f -> !f.isHod())
+                .collect(Collectors.toList());
         List<Room> allRooms = roomRepository.findByActiveTrue();
         List<CollegeTimeslot> allTimeslots = timeslotRepository.findByActiveTrue();
         List<Batch> allBatches = batchRepository.findByActiveTrue();
@@ -606,24 +608,82 @@ public class TimetableSolverService {
         };
 
         for (Batch batch : batches) {
-            int activityIndex = 0;
             Room homeRoom = batchHomeRoomMap != null ? batchHomeRoomMap.get(batch.getId()) : null;
 
-            for (Slot slot : slots) {
-                SlotKey key = new SlotKey(slot.dayOfWeek, slot.periodNumber);
-                if (batchSlotMap.getOrDefault(key, Set.of()).contains(batch.getId())) {
-                    continue; // Slot already occupied by academic class
-                }
+            // Find all free slots for this batch
+            List<Slot> freeSlots = slots.stream()
+                    .filter(slot -> !batchSlotMap.getOrDefault(new SlotKey(slot.dayOfWeek, slot.periodNumber), Set.of()).contains(batch.getId()))
+                    .collect(Collectors.toList());
 
-                String activity = activityIndex < specialActivities.length 
-                        ? specialActivities[activityIndex++] : "FREE";
+            // Separate free Period 1 slots and other periods
+            List<Slot> p1FreeSlots = freeSlots.stream().filter(s -> s.periodNumber == 1).collect(Collectors.toList());
+            List<Slot> otherFreeSlots = freeSlots.stream().filter(s -> s.periodNumber != 1).collect(Collectors.toList());
+
+            // Priority: Place TECHNICAL_TEST and APTITUDE in Period 1 slots where feasible
+            List<String> priorityActivities = new ArrayList<>(List.of("TECHNICAL_TEST", "APTITUDE"));
+            List<String> otherActivities = new ArrayList<>(List.of(
+                    "CAREER_SKILL_DEVELOPMENT", "CAREER_SKILL_DEVELOPMENT",
+                    "LEETCODE", "COUNSELLING", "NPTEL"
+            ));
+
+            List<Map.Entry<Slot, String>> plannedAssignments = new ArrayList<>();
+
+            // Assign priority activities to P1 free slots first
+            for (Slot p1Slot : p1FreeSlots) {
+                if (!priorityActivities.isEmpty()) {
+                    plannedAssignments.add(Map.entry(p1Slot, priorityActivities.remove(0)));
+                } else if (!otherActivities.isEmpty()) {
+                    plannedAssignments.add(Map.entry(p1Slot, otherActivities.remove(0)));
+                } else {
+                    plannedAssignments.add(Map.entry(p1Slot, "FREE"));
+                }
+            }
+
+            // Assign remaining activities to other free slots
+            List<String> remaining = new ArrayList<>(priorityActivities);
+            remaining.addAll(otherActivities);
+            for (Slot oSlot : otherFreeSlots) {
+                if (!remaining.isEmpty()) {
+                    plannedAssignments.add(Map.entry(oSlot, remaining.remove(0)));
+                } else {
+                    plannedAssignments.add(Map.entry(oSlot, "FREE"));
+                }
+            }
+
+            for (Map.Entry<Slot, String> plan : plannedAssignments) {
+                Slot slot = plan.getKey();
+                String activity = plan.getValue();
 
                 Room room = findAvailableRoom(slot, lectureRooms, batch.getStrength(), roomSlotMap, homeRoom);
                 if (room == null && homeRoom != null) room = homeRoom;
                 if (room == null && !lectureRooms.isEmpty()) room = lectureRooms.get(0);
 
                 Faculty fac = null;
-                for (Faculty candidate : facultyList) {
+                SlotKey key = new SlotKey(slot.dayOfWeek, slot.periodNumber);
+
+                // Special Test Allocation for Semesters 3-8: Aptitude & Technical Tests must only be
+                // assigned to faculty from the batch's main department, excluding supporting departments.
+                boolean isSpecialTestSem3To8 = (batch.getSemester() != null && batch.getSemester() >= 3 && batch.getSemester() <= 8)
+                        && ("APTITUDE".equalsIgnoreCase(activity) || "TECHNICAL_TEST".equalsIgnoreCase(activity));
+
+                List<Faculty> candidatePool = facultyList.stream()
+                        .filter(c -> !c.isHod())
+                        .filter(c -> {
+                            if (isSpecialTestSem3To8) {
+                                String fDept = c.getDepartment() != null ? c.getDepartment() : "";
+                                boolean isSupporting = fDept.equalsIgnoreCase("Mathematics") || fDept.equalsIgnoreCase("Physics")
+                                        || fDept.equalsIgnoreCase("Chemistry") || fDept.equalsIgnoreCase("English");
+                                return !isSupporting && com.odysseus.backend.util.DepartmentMatcher.matches(c.getDepartment(), batch.getDepartment());
+                            }
+                            return true;
+                        })
+                        .collect(Collectors.toList());
+
+                if (candidatePool.isEmpty()) {
+                    candidatePool = facultyList.stream().filter(c -> !c.isHod()).collect(Collectors.toList());
+                }
+
+                for (Faculty candidate : candidatePool) {
                     String unavKey = candidate.getId() + "@" + slot.dayOfWeek.toUpperCase() + "-P" + slot.periodNumber;
                     if (!facultyUnavailableSet.contains(unavKey) && !facultySlotMap.getOrDefault(key, Set.of()).contains(candidate.getId())) {
                         fac = candidate;
@@ -631,7 +691,7 @@ public class TimetableSolverService {
                     }
                 }
                 if (fac == null) {
-                    fac = facultyList.stream()
+                    fac = candidatePool.stream()
                             .filter(c -> !facultyUnavailableSet.contains(c.getId() + "@" + slot.dayOfWeek.toUpperCase() + "-P" + slot.periodNumber))
                             .findFirst().orElse(null);
                 }

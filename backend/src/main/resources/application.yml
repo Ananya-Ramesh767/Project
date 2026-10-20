@@ -10,9 +10,10 @@ spring:
     name: odysseus-backend
   
   datasource:
-    # Default to H2 in-memory (PostgreSQL compatibility mode) for instant dev start,
-    # or override with PostgreSQL env vars / application-pg.yml
-    url: ${SPRING_DATASOURCE_URL:jdbc:h2:mem:odysseus_db;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE}
+    # Default to persistent file-based H2 (PostgreSQL compatibility mode) in ./data/odysseus_db
+    # with AUTO_SERVER=TRUE for concurrent console/process access,
+    # or override with PostgreSQL env vars (e.g. on Render / production)
+    url: ${SPRING_DATASOURCE_URL:jdbc:h2:file:./data/odysseus_db;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;AUTO_SERVER=TRUE;DB_CLOSE_DELAY=-1}
     driver-class-name: ${SPRING_DATASOURCE_DRIVER:org.h2.Driver}
     username: ${SPRING_DATASOURCE_USERNAME:sa}
     password: ${SPRING_DATASOURCE_PASSWORD:}

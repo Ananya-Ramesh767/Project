@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Calendar as CalendarIcon, Plus, AlertTriangle, Check, Trash2, CalendarDays, ListFilter } from 'lucide-react';
 import YearCalendar from '../components/YearCalendar';
 import Modal from '../components/Modal';
+import { getStoredAcademicContext, setStoredAcademicContext } from '../utils/academicContext';
 
 export default function CalendarManagementPage({ user }) {
   const isAdmin = user?.role === 'ROLE_ADMIN';
@@ -9,7 +10,11 @@ export default function CalendarManagementPage({ user }) {
   const [selectedYear, setSelectedYear] = useState(currentSystemYear);
   const [calendars, setCalendars] = useState([]);
   const [yearHolidays, setYearHolidays] = useState([]);
-  const [activeTab, setActiveTab] = useState('year-grid'); // 'year-grid' | 'holiday-list'
+  const [activeTab, setActiveTab] = useState('year-grid'); // 'year-grid' | 'holiday-list' | 'semester-schedule'
+
+  // Academic Context & Semester Schedule
+  const initialContext = getStoredAcademicContext();
+  const [selectedSemester, setSelectedSemester] = useState(() => initialContext.semester ? Number(initialContext.semester) : 3);
   
   // Modals
   const [showHolidayModal, setShowHolidayModal] = useState(false);
@@ -104,15 +109,38 @@ export default function CalendarManagementPage({ user }) {
     }
   };
 
+
+
   const unexpectedHolidays = yearHolidays.filter(h => h.unexpected);
   const regularHolidays = yearHolidays.filter(h => !h.unexpected);
+
+  // Filter calendar and events for selected semester
+  const semesterCalendar = calendars.find(c => c.semester === selectedSemester) || calendars[0];
+  const semesterHolidays = (semesterCalendar?.holidays || []).filter(h => h.holidayDate);
+
+  // Calculate approximate teaching/working days
+  let semesterTeachingDaysCount = 0;
+  if (semesterCalendar?.startDate && semesterCalendar?.endDate) {
+    const start = new Date(semesterCalendar.startDate);
+    const end = new Date(semesterCalendar.endDate);
+    const holidayDates = new Set((semesterCalendar.holidays || []).map(h => h.holidayDate));
+    let cur = new Date(start);
+    while (cur <= end) {
+      const day = cur.getDay(); // 0 is Sunday, 6 is Saturday
+      const iso = cur.toISOString().split('T')[0];
+      if (day !== 0 && day !== 6 && !holidayDates.has(iso)) {
+        semesterTeachingDaysCount++;
+      }
+      cur.setDate(cur.getDate() + 1);
+    }
+  }
 
   return (
     <div>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Year Calendar &amp; Government Holidays</h1>
-          <p className="page-subtitle">12-month calendar view with marked Central &amp; State Government Holidays, term schedules, and unexpected holiday declarations.</p>
+          <h1 className="page-title">Year Calendar &amp; Academic Schedule</h1>
+          <p className="page-subtitle">12-month calendar view with marked Central &amp; State Government Holidays, term schedules, examinations, and unexpected holiday declarations.</p>
         </div>
         {isAdmin && (
           <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
@@ -123,7 +151,7 @@ export default function CalendarManagementPage({ user }) {
             >
               <AlertTriangle size={18} /> Declare Unexpected Holiday
             </button>
-            <button className="btn btn-primary" onClick={() => setShowHolidayModal(true)}>
+            <button className="btn btn-secondary" onClick={() => setShowHolidayModal(true)}>
               <Plus size={18} /> Add Term Holiday
             </button>
           </div>
@@ -131,13 +159,119 @@ export default function CalendarManagementPage({ user }) {
       </div>
 
 
+      {/* Semester Academic Schedule Panel */}
+      <div className="glass-panel" style={{ marginBottom: '1.5rem', padding: '1.25rem', borderLeft: '4px solid var(--accent-primary)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+          <div>
+            <h2 style={{ fontSize: '1.15rem', fontWeight: 800, margin: 0, color: 'var(--text-primary)' }}>
+              Semester {selectedSemester} — Academic Schedule
+            </h2>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+              Official term working days, assessment schedules, examination periods, and holidays synchronized with Lesson Plans.
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
+            <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-secondary)', marginRight: '0.3rem' }}>Select Semester:</span>
+            {[1, 2, 3, 4, 5, 6, 7, 8].map(s => (
+              <button
+                key={s}
+                type="button"
+                className={`btn ${selectedSemester === s ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ padding: '0.2rem 0.55rem', fontSize: '0.78rem' }}
+                onClick={() => {
+                  setSelectedSemester(s);
+                  setStoredAcademicContext({ semester: String(s) });
+                }}
+              >
+                Sem {s}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {semesterCalendar ? (
+          <div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.8rem', marginBottom: '1rem' }}>
+              <div style={{ background: 'rgba(0,0,0,0.25)', padding: '0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Term Instructional Period</div>
+                <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '0.2rem' }}>
+                  {semesterCalendar.startDate} → {semesterCalendar.endDate}
+                </div>
+              </div>
+              <div style={{ background: 'rgba(0,0,0,0.25)', padding: '0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Instructional Working Days</div>
+                <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--accent-success)', marginTop: '0.2rem' }}>
+                  {semesterTeachingDaysCount} Teaching Days
+                </div>
+              </div>
+              <div style={{ background: 'rgba(0,0,0,0.25)', padding: '0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Scheduled Term Events</div>
+                <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#38bdf8', marginTop: '0.2rem' }}>
+                  {semesterHolidays.length} Events / Holidays
+                </div>
+              </div>
+            </div>
+
+            {semesterHolidays.length > 0 && (
+              <div className="data-table-container" style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                <table className="data-table" style={{ fontSize: '0.8rem' }}>
+                  <thead>
+                    <tr>
+                      <th style={{ width: '120px' }}>Date</th>
+                      <th>Event / Holiday Name</th>
+                      <th style={{ width: '130px' }}>Classification</th>
+                      <th>Details</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {semesterHolidays.map(h => (
+                      <tr key={h.id || h.holidayDate}>
+                        <td><strong>{h.holidayDate}</strong></td>
+                        <td style={{ fontWeight: 600 }}>{h.name}</td>
+                        <td>
+                          <span className={`badge ${
+                            h.type === 'ASSESSMENT' || (h.name && h.name.toLowerCase().includes('test')) ? 'badge-warning' :
+                            h.type === 'VACATION' || (h.name && h.name.toLowerCase().includes('vacation')) ? 'badge-info' :
+                            'badge-success'
+                          }`}>
+                            {h.type}
+                          </span>
+                        </td>
+                        <td style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          {h.description || 'Instructional exemption observed for Lesson Plans'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={{ padding: '1rem', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-sm)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+              No academic schedule uploaded yet for Semester {selectedSemester}.
+            </span>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              style={{ fontSize: '0.78rem', padding: '0.3rem 0.7rem' }}
+              onClick={() => setShowUploadModal(true)}
+            >
+              Upload Sem {selectedSemester} Schedule PDF
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* Dynamic Year Picker & Quick Stats */}
       <div className="glass-panel" style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           <CalendarIcon size={20} style={{ color: 'var(--accent-primary)' }} />
-          <span style={{ fontWeight: 700, fontSize: '1rem' }}>Selected Academic Year:</span>
+          <span style={{ fontWeight: 700, fontSize: '0.95rem' }}>Calendar Year Reference:</span>
           <div style={{ display: 'flex', gap: '0.4rem' }}>
-            {[currentSystemYear - 1, currentSystemYear, currentSystemYear + 1, currentSystemYear + 2].map(yr => (
+            {[currentSystemYear, currentSystemYear + 1].map(yr => (
               <button
                 key={yr}
                 type="button"
@@ -145,7 +279,7 @@ export default function CalendarManagementPage({ user }) {
                 style={{ padding: '0.3rem 0.75rem', fontSize: '0.85rem' }}
                 onClick={() => setSelectedYear(yr)}
               >
-                {yr}
+                {yr} {yr === currentSystemYear ? '(Current Year)' : '(Next Year)'}
               </button>
             ))}
           </div>

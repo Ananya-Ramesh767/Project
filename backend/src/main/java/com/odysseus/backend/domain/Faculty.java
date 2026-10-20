@@ -37,6 +37,9 @@ public class Faculty {
     private Integer maxWeeklyLoad;
 
     @Builder.Default
+    private boolean hod = false;
+
+    @Builder.Default
     private boolean active = true;
 
     @ManyToMany(fetch = FetchType.LAZY)
@@ -47,4 +50,13 @@ public class Faculty {
     )
     @Builder.Default
     private Set<Subject> eligibleSubjects = new HashSet<>();
+
+    public boolean isHod() {
+        if (hod) return true;
+        if (designation != null) {
+            String des = designation.trim().toLowerCase();
+            return des.equals("hod") || des.contains("head of department") || des.contains("head of the department");
+        }
+        return false;
+    }
 }

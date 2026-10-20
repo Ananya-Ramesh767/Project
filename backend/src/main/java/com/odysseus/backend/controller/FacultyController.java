@@ -588,9 +588,19 @@ public class FacultyController {
                 }
             }
 
-            // Filter relevant batches by semester if subject has semester
-            List<Batch> relevantBatches = batches.stream()
-                    .filter(b -> subject.getSemester() == null || Objects.equals(b.getSemester(), subject.getSemester()))
+            String targetDept = subject.getDepartment() != null ? subject.getDepartment() : department;
+            Integer targetSem = subject.getSemester() != null ? subject.getSemester() : 3;
+
+            if (targetDept != null && targetSem != null) {
+                ensureDepartmentSections(targetDept, targetSem);
+            }
+
+            // Filter relevant batches by semester and department
+            List<Batch> relevantBatches = batchRepository.findAll().stream()
+                    .filter(Batch::isActive)
+                    .filter(b -> targetDept == null || com.odysseus.backend.util.DepartmentMatcher.matches(b.getDepartment(), targetDept))
+                    .filter(b -> targetSem == null || Objects.equals(b.getSemester(), targetSem))
+                    .sorted(Comparator.comparing(b -> b.getSection() != null ? b.getSection() : b.getBatchName()))
                     .collect(Collectors.toList());
 
             if (relevantBatches.isEmpty()) relevantBatches = batches;
@@ -775,5 +785,50 @@ public class FacultyController {
                 "savedFaculty", savedList,
                 "updatedIds", updatedIds
         ));
+    }
+
+    private void ensureDepartmentSections(String department, Integer semester) {
+        if (department == null || semester == null || department.equalsIgnoreCase("ALL") || department.contains("[object")) return;
+        char[] sections = {'A', 'B', 'C', 'D', 'E', 'F', 'G'};
+        String deptCode = getDeptCode(department);
+        for (char sec : sections) {
+            String secStr = String.valueOf(sec);
+            boolean exists = batchRepository.findAll().stream()
+                    .anyMatch(b -> b.isActive()
+                            && com.odysseus.backend.util.DepartmentMatcher.matches(b.getDepartment(), department)
+                            && Objects.equals(b.getSemester(), semester)
+                            && secStr.equalsIgnoreCase(b.getSection()));
+            if (!exists) {
+                batchRepository.save(Batch.builder()
+                        .department(department)
+                        .semester(semester)
+                        .section(secStr)
+                        .batchName(deptCode + "-" + secStr)
+                        .strength(60)
+                        .academicYear("2026-2027")
+                        .active(true)
+                        .build());
+            }
+        }
+    }
+
+    private String getDeptCode(String department) {
+        if (department == null) return "DEPT";
+        if (department.contains("Artificial Intelligence & Machine Learning") || department.contains("AI & ML")) return "CSE-AIML";
+        if (department.contains("Cyber Security")) return "CSE-CS";
+        if (department.equalsIgnoreCase("Computer Science Engineering")) return "CSE";
+        if (department.equalsIgnoreCase("Information Technology")) return "IT";
+        if (department.equalsIgnoreCase("Mechanical Engineering")) return "MECH";
+        if (department.equalsIgnoreCase("Civil Engineering")) return "CIVIL";
+        if (department.equalsIgnoreCase("Electrical & Electronics")) return "EEE";
+        if (department.equalsIgnoreCase("Electronics & Communication Engineering")) return "ECE";
+        if (department.equalsIgnoreCase("Biomedical Engineering")) return "BME";
+        if (department.equalsIgnoreCase("Automobile Engineering")) return "AUTO";
+        if (department.equalsIgnoreCase("Robotics and Automation Engineering")) return "ROBOTICS";
+        if (department.equalsIgnoreCase("AI and Data Science Engineering")) return "AIDS";
+        if (department.contains("Biotechnology")) return "BIOTECH";
+        if (department.contains("Business System")) return "CSBS";
+        String letters = department.replaceAll("[^A-Z]", "");
+        return letters.isEmpty() ? department.substring(0, Math.min(4, department.length())).toUpperCase() : letters;
     }
 }

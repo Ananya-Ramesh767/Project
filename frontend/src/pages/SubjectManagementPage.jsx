@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import LiveCreditCalculator from '../components/LiveCreditCalculator';
 import { Plus, Edit2, Trash2, BookOpen, Upload, Filter, Check, AlertCircle, FileText } from 'lucide-react';
-import { INSTITUTIONAL_PROGRAMMES } from '../utils/programmes';
+import { INSTITUTIONAL_PROGRAMMES, FACULTY_DEPARTMENTS } from '../utils/programmes';
+import { SEMESTER_OPTIONS, getStoredAcademicContext, setStoredAcademicContext } from '../utils/academicContext';
 import Modal from '../components/Modal';
 
 export default function SubjectManagementPage({ user }) {
@@ -11,14 +12,15 @@ export default function SubjectManagementPage({ user }) {
   const [editId, setEditId] = useState(null);
 
   // Filters (synchronized with active academic context)
-  const [filterSemester, setFilterSemester] = useState(() => localStorage.getItem('academicContext_semester') || '3');
-  const [filterDept, setFilterDept] = useState(() => localStorage.getItem('academicContext_dept') || INSTITUTIONAL_PROGRAMMES[4]);
+  const initialContext = getStoredAcademicContext();
+  const [filterSemester, setFilterSemester] = useState(() => initialContext.semester || '');
+  const [filterDept, setFilterDept] = useState(() => initialContext.department || '');
 
   // Document Upload & Preview
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadFile, setUploadFile] = useState(null);
-  const [uploadDept, setUploadDept] = useState(INSTITUTIONAL_PROGRAMMES[4]); // Computer Science Engineering
-  const [uploadSemester, setUploadSemester] = useState(3);
+  const [uploadDept, setUploadDept] = useState(() => initialContext.department || INSTITUTIONAL_PROGRAMMES[4]);
+  const [uploadSemester, setUploadSemester] = useState(() => initialContext.semester ? Number(initialContext.semester) : 3);
   const [uploadSectionCount, setUploadSectionCount] = useState(7);
   const [uploadLoading, setUploadLoading] = useState(false);
   const [parsedSubjects, setParsedSubjects] = useState([]);
@@ -27,6 +29,49 @@ export default function SubjectManagementPage({ user }) {
   const [uploadTab, setUploadTab] = useState('file'); // 'file' | 'paste'
   const [pasteText, setPasteText] = useState('');
   const [pageSuccess, setPageSuccess] = useState('');
+
+  // Department Faculty List Inspection Modal
+  const [viewingFacultyDept, setViewingFacultyDept] = useState(null);
+  const [deptFacultyList, setDeptFacultyList] = useState([]);
+  const [deptFacultyLoading, setDeptFacultyLoading] = useState(false);
+  const [showFacultyListModal, setShowFacultyListModal] = useState(false);
+
+  const getShortDeptName = (dept) => {
+    if (!dept) return '';
+    if (dept.toLowerCase().includes('computer science')) return 'CSE';
+    if (dept.toLowerCase().includes('information')) return 'IT';
+    if (dept.toLowerCase().includes('mathematics')) return 'Math';
+    if (dept.toLowerCase().includes('physics')) return 'Physics';
+    if (dept.toLowerCase().includes('chemistry')) return 'Chemistry';
+    if (dept.toLowerCase().includes('english')) return 'English';
+    if (dept.toLowerCase().includes('biomedical')) return 'BME';
+    if (dept.toLowerCase().includes('mechanical')) return 'MECH';
+    if (dept.toLowerCase().includes('civil')) return 'CIVIL';
+    return dept.split(' ')[0];
+  };
+
+  const handleViewFacultyList = async (deptName) => {
+    if (!deptName) return;
+    setViewingFacultyDept(deptName);
+    setDeptFacultyLoading(true);
+    setShowFacultyListModal(true);
+    try {
+      const res = await fetch(`/api/admin/faculty?department=${encodeURIComponent(deptName)}`, {
+        headers: { 'Authorization': `Bearer ${user.token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setDeptFacultyList(data || []);
+      } else {
+        setDeptFacultyList([]);
+      }
+    } catch (e) {
+      console.error('Failed to load faculty list:', e);
+      setDeptFacultyList([]);
+    } finally {
+      setDeptFacultyLoading(false);
+    }
+  };
 
   const [form, setForm] = useState({
     subjectCode: '',
@@ -153,25 +198,7 @@ export default function SubjectManagementPage({ user }) {
     });
   };
 
-  const loadSem3Preset = () => {
-    const sem3Subjects = [
-      { subjectCode: '2321MAB301T', subjectName: 'Discrete Mathematics', department: uploadDept, semester: uploadSemester, subjectType: 'THEORY', theoryCredits: 4, labCredits: 0, tutorialCredits: 0, theoryHours: 4, labHours: 0, tutorialHours: 0, calculatedWeeklyHours: 4, requiresLab: false, labDuration: null },
-      { subjectCode: '2321CSC301T', subjectName: 'Computer Networks', department: uploadDept, semester: uploadSemester, subjectType: 'THEORY', theoryCredits: 3, labCredits: 0, tutorialCredits: 0, theoryHours: 3, labHours: 0, tutorialHours: 0, calculatedWeeklyHours: 3, requiresLab: false, labDuration: null },
-      { subjectCode: '2321CSC302J', subjectName: 'Advanced Data Structures and Algorithms', department: uploadDept, semester: uploadSemester, subjectType: 'THEORY_AND_LAB', theoryCredits: 3, labCredits: 1, tutorialCredits: 0, theoryHours: 3, labHours: 2, tutorialHours: 0, calculatedWeeklyHours: 5, requiresLab: true, labDuration: 2 },
-      { subjectCode: '2321CSC303J', subjectName: 'Fundamentals of Artificial Intelligence and Machine Learning', department: uploadDept, semester: uploadSemester, subjectType: 'THEORY_AND_LAB', theoryCredits: 2, labCredits: 1, tutorialCredits: 0, theoryHours: 2, labHours: 2, tutorialHours: 0, calculatedWeeklyHours: 4, requiresLab: true, labDuration: 2 },
-      { subjectCode: '2321CSS301J', subjectName: 'Embedded System Design', department: uploadDept, semester: uploadSemester, subjectType: 'THEORY_AND_LAB', theoryCredits: 3, labCredits: 1, tutorialCredits: 0, theoryHours: 3, labHours: 2, tutorialHours: 0, calculatedWeeklyHours: 5, requiresLab: true, labDuration: 2 },
-      { subjectCode: '2321CSC304R', subjectName: 'Object Oriented Programming using Java', department: uploadDept, semester: uploadSemester, subjectType: 'THEORY_AND_LAB', theoryCredits: 4, labCredits: 1, tutorialCredits: 0, theoryHours: 4, labHours: 2, tutorialHours: 0, calculatedWeeklyHours: 6, requiresLab: true, labDuration: 2 },
-      { subjectCode: '2321SDA301L', subjectName: 'Career Skill Development III', department: uploadDept, semester: uploadSemester, subjectType: 'LAB', theoryCredits: 0, labCredits: 1, tutorialCredits: 0, theoryHours: 0, labHours: 2, tutorialHours: 0, calculatedWeeklyHours: 2, requiresLab: true, labDuration: 2 },
-      { subjectCode: '2321APT301', subjectName: 'Aptitude Test', department: uploadDept, semester: uploadSemester, subjectType: 'THEORY', theoryCredits: 1, labCredits: 0, tutorialCredits: 0, theoryHours: 1, labHours: 0, tutorialHours: 0, calculatedWeeklyHours: 1, requiresLab: false, labDuration: null },
-      { subjectCode: '2321TEC301', subjectName: 'Technical Test', department: uploadDept, semester: uploadSemester, subjectType: 'THEORY', theoryCredits: 1, labCredits: 0, tutorialCredits: 0, theoryHours: 1, labHours: 0, tutorialHours: 0, calculatedWeeklyHours: 1, requiresLab: false, labDuration: null },
-      { subjectCode: '2321NPT301', subjectName: 'NPTEL', department: uploadDept, semester: uploadSemester, subjectType: 'THEORY', theoryCredits: 1, labCredits: 0, tutorialCredits: 0, theoryHours: 1, labHours: 0, tutorialHours: 0, calculatedWeeklyHours: 1, requiresLab: false, labDuration: null },
-      { subjectCode: '2321LEE301', subjectName: 'Leet Code', department: uploadDept, semester: uploadSemester, subjectType: 'LAB', theoryCredits: 0, labCredits: 1, tutorialCredits: 0, theoryHours: 0, labHours: 1, tutorialHours: 0, calculatedWeeklyHours: 1, requiresLab: true, labDuration: 2 },
-      { subjectCode: '2321COU301', subjectName: 'Counselling', department: uploadDept, semester: uploadSemester, subjectType: 'THEORY', theoryCredits: 1, labCredits: 0, tutorialCredits: 0, theoryHours: 1, labHours: 0, tutorialHours: 0, calculatedWeeklyHours: 1, requiresLab: false, labDuration: null }
-    ];
-    setParsedSubjects(sem3Subjects);
-    setUploadError('');
-    setUploadSuccess(`Loaded all 12 subjects from your curriculum document! Review below and click 'Commit All Subjects to Database'.`);
-  };
+
 
   const handlePasteParse = async (e) => {
     e.preventDefault();
@@ -322,10 +349,22 @@ export default function SubjectManagementPage({ user }) {
   };
 
   const filteredSubjects = subjects.filter(sub => {
+    if (!filterSemester || filterSemester === '') return false;
     if (filterSemester !== 'ALL' && sub.semester !== Number(filterSemester)) return false;
+    if (!filterDept || filterDept === '') return false;
     if (filterDept !== 'ALL' && sub.department !== filterDept) return false;
     return true;
   });
+
+  const handleDeptFilter = (dept) => {
+    setFilterDept(dept);
+    if (dept && dept !== 'ALL') setStoredAcademicContext({ department: dept });
+  };
+
+  const handleSemesterFilter = (sem) => {
+    setFilterSemester(sem);
+    if (sem && sem !== 'ALL') setStoredAcademicContext({ semester: sem });
+  };
 
   return (
     <div>
@@ -392,45 +431,78 @@ export default function SubjectManagementPage({ user }) {
             </div>
           </div>
           <div className="data-table-container" style={{ maxHeight: '280px', overflowY: 'auto' }}>
-            <table className="data-table">
+            <table className="data-table" style={{ minWidth: '1050px' }}>
               <thead>
                 <tr>
-                  <th>Code</th>
-                  <th>Subject Name</th>
-                  <th>Type</th>
-                  <th>Theory Cr.</th>
-                  <th>Lab Cr.</th>
-                  <th>Tut. Cr.</th>
-                  <th>Weekly Hrs</th>
-                  <th>Remove</th>
+                  <th style={{ minWidth: '110px' }}>Code</th>
+                  <th style={{ minWidth: '220px' }}>Subject Name</th>
+                  <th style={{ minWidth: '110px' }}>Type</th>
+                  <th style={{ minWidth: '180px' }}>Faculty Department</th>
+                  <th style={{ minWidth: '150px' }}>Faculty Roster</th>
+                  <th style={{ minWidth: '60px', textAlign: 'center' }}>Th</th>
+                  <th style={{ minWidth: '60px', textAlign: 'center' }}>Lab</th>
+                  <th style={{ minWidth: '60px', textAlign: 'center' }}>Tut</th>
+                  <th style={{ minWidth: '90px', textAlign: 'center' }}>Weekly Hrs</th>
+                  <th style={{ minWidth: '60px', textAlign: 'center' }}>Remove</th>
                 </tr>
               </thead>
               <tbody>
-                {parsedSubjects.map((sub, idx) => (
-                  <tr key={idx}>
-                    <td>
-                      <input type="text" className="form-input" style={{ padding: '0.2rem 0.4rem', fontSize: '0.8rem', width: '110px' }}
-                        value={sub.subjectCode}
-                        onChange={e => { const c = [...parsedSubjects]; c[idx].subjectCode = e.target.value; setParsedSubjects(c); }}
-                      />
-                    </td>
-                    <td>
-                      <input type="text" className="form-input" style={{ padding: '0.2rem 0.4rem', fontSize: '0.8rem', minWidth: '180px' }}
-                        value={sub.subjectName}
-                        onChange={e => { const c = [...parsedSubjects]; c[idx].subjectName = e.target.value; setParsedSubjects(c); }}
-                      />
-                    </td>
-                    <td><span className="badge badge-warning" style={{ fontSize: '0.7rem' }}>{sub.subjectType || 'THEORY'}</span></td>
-                    <td style={{ textAlign: 'center' }}>{sub.theoryCredits ?? 0}</td>
-                    <td style={{ textAlign: 'center' }}>{sub.labCredits ?? 0}</td>
-                    <td style={{ textAlign: 'center' }}>{sub.tutorialCredits ?? 0}</td>
-                    <td style={{ textAlign: 'center' }}><strong style={{ color: 'var(--accent-primary)' }}>{sub.calculatedWeeklyHours ?? (sub.theoryCredits + (sub.labCredits * 2) + sub.tutorialCredits)} hrs/wk</strong></td>
-                    <td>
-                      <button type="button" className="btn btn-danger" style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem' }}
-                        onClick={() => setParsedSubjects(parsedSubjects.filter((_, i) => i !== idx))}>✕</button>
-                    </td>
-                  </tr>
-                ))}
+                {parsedSubjects.map((sub, idx) => {
+                  const assignedDept = sub.facultyDepartment || sub.proposedFacultyDepartment || sub.department || uploadDept;
+                  return (
+                    <tr key={idx}>
+                      <td>
+                        <input type="text" className="form-input" style={{ padding: '0.2rem 0.4rem', fontSize: '0.8rem', width: '110px' }}
+                          value={sub.subjectCode}
+                          onChange={e => { const c = [...parsedSubjects]; c[idx].subjectCode = e.target.value; setParsedSubjects(c); }}
+                        />
+                      </td>
+                      <td>
+                        <input type="text" className="form-input" style={{ padding: '0.2rem 0.4rem', fontSize: '0.8rem', minWidth: '200px', width: '100%' }}
+                          value={sub.subjectName}
+                          onChange={e => { const c = [...parsedSubjects]; c[idx].subjectName = e.target.value; setParsedSubjects(c); }}
+                        />
+                      </td>
+                      <td><span className="badge badge-warning" style={{ fontSize: '0.7rem' }}>{sub.subjectType || 'THEORY'}</span></td>
+                      <td>
+                        <select
+                          className="form-select"
+                          style={{ padding: '0.2rem 0.4rem', fontSize: '0.75rem', width: '100%', minWidth: '160px' }}
+                          value={assignedDept}
+                          onChange={e => {
+                            const c = [...parsedSubjects];
+                            c[idx].facultyDepartment = e.target.value;
+                            c[idx].proposedFacultyDepartment = e.target.value;
+                            setParsedSubjects(c);
+                          }}
+                        >
+                          {FACULTY_DEPARTMENTS.map(prog => (
+                            <option key={prog} value={prog}>{prog}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+                          onClick={() => handleViewFacultyList(assignedDept)}
+                        >
+                          <BookOpen size={12} />
+                          View {getShortDeptName(assignedDept)} Faculty List
+                        </button>
+                      </td>
+                      <td style={{ textAlign: 'center' }}>{sub.theoryCredits ?? 0}</td>
+                      <td style={{ textAlign: 'center' }}>{sub.labCredits ?? 0}</td>
+                      <td style={{ textAlign: 'center' }}>{sub.tutorialCredits ?? 0}</td>
+                      <td style={{ textAlign: 'center' }}><strong style={{ color: 'var(--accent-primary)' }}>{sub.calculatedWeeklyHours ?? (sub.theoryCredits + (sub.labCredits * 2) + sub.tutorialCredits)} hrs/wk</strong></td>
+                      <td style={{ textAlign: 'center' }}>
+                        <button type="button" className="btn btn-danger" style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem' }}
+                          onClick={() => setParsedSubjects(parsedSubjects.filter((_, i) => i !== idx))}>✕</button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -441,40 +513,34 @@ export default function SubjectManagementPage({ user }) {
       <div className="glass-panel" style={{ marginBottom: '1.5rem', padding: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Filter size={16} style={{ color: 'var(--accent-primary)' }} />
-            <span style={{ fontSize: '0.85rem', fontWeight: 700 }}>Semester:</span>
-            <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
-              {['ALL', '1', '2', '3', '4', '5', '6', '7', '8'].map(s => (
-                <button
-                  key={s}
-                  type="button"
-                  className={`btn ${filterSemester === s ? 'btn-primary' : 'btn-secondary'}`}
-                  style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem' }}
-                  onClick={() => {
-                    setFilterSemester(s);
-                    if (s !== 'ALL') localStorage.setItem('academicContext_semester', s);
-                  }}
-                >
-                  {s === 'ALL' ? 'All Semesters' : `Sem ${s}`}
-                </button>
+            <span style={{ fontSize: '0.85rem', fontWeight: 700 }}>Department:</span>
+            <select
+              className="form-select"
+              style={{ padding: '0.35rem 0.75rem', fontSize: '0.85rem', minWidth: '220px' }}
+              value={filterDept}
+              onChange={e => handleDeptFilter(e.target.value)}
+            >
+              <option value="">-- Select Department --</option>
+              <option value="ALL">All Departments</option>
+              {INSTITUTIONAL_PROGRAMMES.map(prog => (
+                <option key={prog} value={prog}>{prog}</option>
               ))}
-            </div>
+            </select>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <span style={{ fontSize: '0.85rem', fontWeight: 700 }}>Programme:</span>
+            <Filter size={16} style={{ color: 'var(--accent-primary)' }} />
+            <span style={{ fontSize: '0.85rem', fontWeight: 700 }}>Semester:</span>
             <select
               className="form-select"
-              style={{ padding: '0.3rem 0.75rem', fontSize: '0.8rem', width: 'auto', maxWidth: '320px' }}
-              value={filterDept}
-              onChange={e => {
-                setFilterDept(e.target.value);
-                if (e.target.value !== 'ALL') localStorage.setItem('academicContext_dept', e.target.value);
-              }}
+              style={{ padding: '0.35rem 0.75rem', fontSize: '0.85rem', minWidth: '220px' }}
+              value={filterSemester}
+              onChange={e => handleSemesterFilter(e.target.value)}
             >
-              <option value="ALL">All Programmes</option>
-              {INSTITUTIONAL_PROGRAMMES.map(prog => (
-                <option key={prog} value={prog}>{prog}</option>
+              <option value="">-- Select Semester --</option>
+              <option value="ALL">All Semesters</option>
+              {SEMESTER_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
               ))}
             </select>
           </div>
@@ -533,19 +599,23 @@ export default function SubjectManagementPage({ user }) {
               ))}
               {filteredSubjects.length === 0 && (
                 <tr>
-                  <td colSpan="9" style={{ textAlign: 'center', padding: '3.5rem 1rem' }}>
+                  <td colSpan="10" style={{ textAlign: 'center', padding: '3.5rem 1rem' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
                       <BookOpen size={44} style={{ color: 'var(--text-muted)', opacity: 0.5 }} />
-                      <h4 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0 }}>No subjects uploaded yet.</h4>
+                      <h4 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0 }}>
+                        {!filterDept || !filterSemester
+                          ? 'Please select Department and Semester above to view subjects.'
+                          : 'No subjects found for this selection.'}
+                      </h4>
                       <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: 0, maxWidth: '450px' }}>
-                        Upload the curriculum/syllabus PDF for this programme and semester to automatically extract subjects, credits, and NEP weekly hours.
+                        Upload the curriculum/syllabus PDF for this department and semester to automatically extract course codes, titles, credits, and weekly hours.
                       </p>
                       <button
                         className="btn btn-primary"
                         style={{ marginTop: '0.5rem', fontSize: '0.85rem' }}
                         onClick={() => {
-                          if (filterDept !== 'ALL') setUploadDept(filterDept);
-                          if (filterSemester !== 'ALL') setUploadSemester(Number(filterSemester));
+                          if (filterDept && filterDept !== 'ALL') setUploadDept(filterDept);
+                          if (filterSemester && filterSemester !== 'ALL') setUploadSemester(Number(filterSemester));
                           setShowUploadModal(true);
                           setUploadError('');
                           setUploadSuccess('');
@@ -690,27 +760,6 @@ export default function SubjectManagementPage({ user }) {
               <FileText size={15} /> Paste Text / Table
             </button>
           </div>
-
-          <button
-            type="button"
-            className="btn"
-            style={{
-              background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-              color: '#fff',
-              fontSize: '0.85rem',
-              fontWeight: 700,
-              padding: '0.45rem 1rem',
-              boxShadow: '0 4px 14px rgba(16, 185, 129, 0.35)',
-              border: 'none',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem'
-            }}
-            onClick={loadSem3Preset}
-          >
-            ⚡ Load Document Subjects (Semester 3)
-          </button>
         </div>
 
         {uploadError && (
@@ -729,25 +778,17 @@ export default function SubjectManagementPage({ user }) {
             </div>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '0.85rem', lineHeight: 1.5 }}>
               {uploadError === 'SCANNED_IMAGE'
-                ? 'Your uploaded PDF is a scanned photo/image with no selectable digital text. Odysseus has already recognized your Semester 3 Computer Science curriculum table from the document image!'
-                : 'Could not extract text lines from the document format. You can instantly load the exact 12 subjects recognized from your curriculum sheet below.'}
+                ? 'Your uploaded PDF appears to be a scanned image without a selectable text layer. Please upload a digital PDF document or switch to Paste Text / Table tab to paste curriculum lines directly.'
+                : 'Could not extract curriculum lines automatically from the document format. Please verify the document format or switch to Paste Text / Table to paste rows directly.'}
             </p>
             <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                className="btn btn-primary"
-                style={{ fontSize: '0.85rem', padding: '0.45rem 1rem' }}
-                onClick={loadSem3Preset}
-              >
-                ⚡ Populate 12 Recognized Subjects Now
-              </button>
               <button
                 type="button"
                 className="btn btn-secondary"
                 style={{ fontSize: '0.85rem', padding: '0.45rem 0.8rem' }}
                 onClick={() => { setUploadTab('paste'); setUploadError(''); }}
               >
-                Paste Table Text Manually
+                Switch to Paste Text / Table
               </button>
             </div>
           </div>
@@ -911,118 +952,151 @@ export default function SubjectManagementPage({ user }) {
                 </div>
 
                 <div className="data-table-container" style={{ maxHeight: '320px', overflowY: 'auto', marginBottom: '1.25rem' }}>
-                  <table className="data-table">
+                  <table className="data-table" style={{ minWidth: '1050px' }}>
                     <thead>
                       <tr>
-                        <th>Code</th>
-                        <th>Name</th>
-                        <th>Type</th>
-                        <th>Th</th>
-                        <th>Lab</th>
-                        <th>Tut</th>
-                        <th>Actions</th>
+                        <th style={{ minWidth: '100px' }}>Code</th>
+                        <th style={{ minWidth: '220px' }}>Name</th>
+                        <th style={{ minWidth: '110px' }}>Type</th>
+                        <th style={{ minWidth: '180px' }}>Faculty Department</th>
+                        <th style={{ minWidth: '150px' }}>Faculty Roster</th>
+                        <th style={{ minWidth: '55px', textAlign: 'center' }}>Th</th>
+                        <th style={{ minWidth: '55px', textAlign: 'center' }}>Lab</th>
+                        <th style={{ minWidth: '55px', textAlign: 'center' }}>Tut</th>
+                        <th style={{ minWidth: '70px', textAlign: 'center' }}>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {parsedSubjects.map((sub, idx) => (
-                        <tr key={idx}>
-                          <td>
-                            <input
-                              type="text"
-                              className="form-input"
-                              style={{ padding: '0.2rem 0.4rem', fontSize: '0.8rem', width: '100px' }}
-                              value={sub.subjectCode}
-                              onChange={e => {
-                                const copy = [...parsedSubjects];
-                                copy[idx].subjectCode = e.target.value;
-                                setParsedSubjects(copy);
-                              }}
-                            />
-                          </td>
-                          <td>
-                            <input
-                              type="text"
-                              className="form-input"
-                              style={{ padding: '0.2rem 0.4rem', fontSize: '0.8rem' }}
-                              value={sub.subjectName}
-                              onChange={e => {
-                                const copy = [...parsedSubjects];
-                                copy[idx].subjectName = e.target.value;
-                                setParsedSubjects(copy);
-                              }}
-                            />
-                          </td>
-                          <td>
-                            <select
-                              className="form-select"
-                              style={{ padding: '0.2rem 0.4rem', fontSize: '0.75rem', width: 'auto' }}
-                              value={sub.subjectType}
-                              onChange={e => {
-                                const copy = [...parsedSubjects];
-                                copy[idx].subjectType = e.target.value;
-                                setParsedSubjects(copy);
-                              }}
-                            >
-                              <option value="THEORY">THEORY</option>
-                              <option value="LAB">LAB</option>
-                              <option value="TUTORIAL">TUTORIAL</option>
-                              <option value="THEORY_AND_LAB">THEORY_AND_LAB</option>
-                            </select>
-                          </td>
-                          <td>
-                            <input
-                              type="number"
-                              className="form-input"
-                              style={{ padding: '0.2rem 0.4rem', fontSize: '0.8rem', width: '55px' }}
-                              value={sub.theoryCredits}
-                              onChange={e => {
-                                const copy = [...parsedSubjects];
-                                copy[idx].theoryCredits = parseFloat(e.target.value) || 0;
-                                setParsedSubjects(copy);
-                              }}
-                            />
-                          </td>
-                          <td>
-                            <input
-                              type="number"
-                              className="form-input"
-                              style={{ padding: '0.2rem 0.4rem', fontSize: '0.8rem', width: '55px' }}
-                              value={sub.labCredits}
-                              onChange={e => {
-                                const copy = [...parsedSubjects];
-                                copy[idx].labCredits = parseFloat(e.target.value) || 0;
-                                copy[idx].requiresLab = (parseFloat(e.target.value) || 0) > 0;
-                                setParsedSubjects(copy);
-                              }}
-                            />
-                          </td>
-                          <td>
-                            <input
-                              type="number"
-                              className="form-input"
-                              style={{ padding: '0.2rem 0.4rem', fontSize: '0.8rem', width: '55px' }}
-                              value={sub.tutorialCredits}
-                              onChange={e => {
-                                const copy = [...parsedSubjects];
-                                copy[idx].tutorialCredits = parseFloat(e.target.value) || 0;
-                                setParsedSubjects(copy);
-                              }}
-                            />
-                          </td>
-                          <td>
-                            <button
-                              type="button"
-                              className="btn btn-danger"
-                              style={{ padding: '0.25rem 0.5rem', fontSize: '0.7rem' }}
-                              onClick={() => {
-                                setParsedSubjects(parsedSubjects.filter((_, i) => i !== idx));
-                              }}
-                            >
-                              Remove
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
+                      {parsedSubjects.map((sub, idx) => {
+                        const assignedDept = sub.facultyDepartment || sub.proposedFacultyDepartment || sub.department || uploadDept;
+                        return (
+                          <tr key={idx}>
+                            <td>
+                              <input
+                                type="text"
+                                className="form-input"
+                                style={{ padding: '0.2rem 0.4rem', fontSize: '0.8rem', width: '100px' }}
+                                value={sub.subjectCode}
+                                onChange={e => {
+                                  const copy = [...parsedSubjects];
+                                  copy[idx].subjectCode = e.target.value;
+                                  setParsedSubjects(copy);
+                                }}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                type="text"
+                                className="form-input"
+                                style={{ padding: '0.2rem 0.4rem', fontSize: '0.8rem', minWidth: '200px', width: '100%' }}
+                                value={sub.subjectName}
+                                onChange={e => {
+                                  const copy = [...parsedSubjects];
+                                  copy[idx].subjectName = e.target.value;
+                                  setParsedSubjects(copy);
+                                }}
+                              />
+                            </td>
+                            <td>
+                              <select
+                                className="form-select"
+                                style={{ padding: '0.2rem 0.4rem', fontSize: '0.75rem', width: 'auto' }}
+                                value={sub.subjectType}
+                                onChange={e => {
+                                  const copy = [...parsedSubjects];
+                                  copy[idx].subjectType = e.target.value;
+                                  setParsedSubjects(copy);
+                                }}
+                              >
+                                <option value="THEORY">THEORY</option>
+                                <option value="LAB">LAB</option>
+                                <option value="TUTORIAL">TUTORIAL</option>
+                                <option value="THEORY_AND_LAB">THEORY_AND_LAB</option>
+                              </select>
+                            </td>
+                            <td>
+                              <select
+                                className="form-select"
+                                style={{ padding: '0.2rem 0.4rem', fontSize: '0.75rem', width: '100%', minWidth: '160px' }}
+                                value={assignedDept}
+                                onChange={e => {
+                                  const copy = [...parsedSubjects];
+                                  copy[idx].facultyDepartment = e.target.value;
+                                  copy[idx].proposedFacultyDepartment = e.target.value;
+                                  setParsedSubjects(copy);
+                                }}
+                              >
+                                {FACULTY_DEPARTMENTS.map(prog => (
+                                  <option key={prog} value={prog}>{prog}</option>
+                                ))}
+                              </select>
+                            </td>
+                            <td>
+                              <button
+                                type="button"
+                                className="btn btn-secondary"
+                                style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+                                onClick={() => handleViewFacultyList(assignedDept)}
+                              >
+                                <BookOpen size={12} />
+                                View {getShortDeptName(assignedDept)} Faculty List
+                              </button>
+                            </td>
+                            <td style={{ textAlign: 'center' }}>
+                              <input
+                                type="number"
+                                className="form-input"
+                                style={{ padding: '0.2rem 0.4rem', fontSize: '0.8rem', width: '55px' }}
+                                value={sub.theoryCredits}
+                                onChange={e => {
+                                  const copy = [...parsedSubjects];
+                                  copy[idx].theoryCredits = parseFloat(e.target.value) || 0;
+                                  setParsedSubjects(copy);
+                                }}
+                              />
+                            </td>
+                            <td style={{ textAlign: 'center' }}>
+                              <input
+                                type="number"
+                                className="form-input"
+                                style={{ padding: '0.2rem 0.4rem', fontSize: '0.8rem', width: '55px' }}
+                                value={sub.labCredits}
+                                onChange={e => {
+                                  const copy = [...parsedSubjects];
+                                  copy[idx].labCredits = parseFloat(e.target.value) || 0;
+                                  copy[idx].requiresLab = (parseFloat(e.target.value) || 0) > 0;
+                                  setParsedSubjects(copy);
+                                }}
+                              />
+                            </td>
+                            <td style={{ textAlign: 'center' }}>
+                              <input
+                                type="number"
+                                className="form-input"
+                                style={{ padding: '0.2rem 0.4rem', fontSize: '0.8rem', width: '55px' }}
+                                value={sub.tutorialCredits}
+                                onChange={e => {
+                                  const copy = [...parsedSubjects];
+                                  copy[idx].tutorialCredits = parseFloat(e.target.value) || 0;
+                                  setParsedSubjects(copy);
+                                }}
+                              />
+                            </td>
+                            <td style={{ textAlign: 'center' }}>
+                              <button
+                                type="button"
+                                className="btn btn-danger"
+                                style={{ padding: '0.25rem 0.5rem', fontSize: '0.7rem' }}
+                                onClick={() => {
+                                  setParsedSubjects(parsedSubjects.filter((_, i) => i !== idx));
+                                }}
+                              >
+                                Remove
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -1042,6 +1116,88 @@ export default function SubjectManagementPage({ user }) {
                 </div>
               </div>
             )}
+      </Modal>
+
+      {/* Modal - View Department Faculty List */}
+      <Modal
+        isOpen={showFacultyListModal}
+        onClose={() => setShowFacultyListModal(false)}
+        title={`Faculty List — ${viewingFacultyDept || 'Department'}`}
+        maxWidth="850px"
+      >
+        <div style={{ marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+            <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+              Saved faculty roster for <strong>{viewingFacultyDept}</strong> used for automatic subject allocations.
+            </span>
+            <span className="badge badge-info" style={{ fontSize: '0.75rem' }}>
+              {deptFacultyList.length} Faculty Member{deptFacultyList.length === 1 ? '' : 's'}
+            </span>
+          </div>
+
+          {deptFacultyLoading ? (
+            <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+              Loading {viewingFacultyDept} faculty records...
+            </div>
+          ) : deptFacultyList.length === 0 ? (
+            <div className="alert alert-warning" style={{ padding: '1rem', lineHeight: '1.5' }}>
+              <div style={{ fontWeight: 600, marginBottom: '0.3rem' }}>
+                ⚠️ No Faculty Records Found for {viewingFacultyDept}
+              </div>
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.8rem' }}>
+                The curriculum contains subjects requiring faculty from <strong>{viewingFacultyDept}</strong>.
+                To enable automatic faculty allocation, please upload the <strong>{viewingFacultyDept}</strong> faculty roster once in Faculty Master.
+              </div>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ fontSize: '0.8rem', padding: '0.35rem 0.8rem' }}
+                onClick={() => {
+                  setShowFacultyListModal(false);
+                  window.location.hash = '#/faculty';
+                }}
+              >
+                Go to Faculty Master Upload
+              </button>
+            </div>
+          ) : (
+            <div className="data-table-container" style={{ maxHeight: '360px', overflowY: 'auto' }}>
+              <table className="data-table" style={{ width: '100%', fontSize: '0.82rem' }}>
+                <thead>
+                  <tr>
+                    <th>Emp ID</th>
+                    <th>Full Name</th>
+                    <th>Designation</th>
+                    <th>Specialization / Handled</th>
+                    <th style={{ textAlign: 'center' }}>Max Weekly Load</th>
+                    <th style={{ textAlign: 'center' }}>HOD</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {deptFacultyList.map(f => (
+                    <tr key={f.id || f.employeeId}>
+                      <td><strong>{f.employeeId}</strong></td>
+                      <td style={{ fontWeight: 600 }}>{f.name}</td>
+                      <td>{f.designation || 'Faculty'}</td>
+                      <td style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                        {f.specialization || f.subjectsHandled || '—'}
+                      </td>
+                      <td style={{ textAlign: 'center' }}>{f.maxWeeklyLoad || 18} hrs</td>
+                      <td style={{ textAlign: 'center' }}>
+                        {f.hod ? <span className="badge badge-warning">HOD (Non-Teaching)</span> : <span className="badge badge-success">Teaching</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+          <button type="button" className="btn btn-secondary" onClick={() => setShowFacultyListModal(false)}>
+            Close
+          </button>
+        </div>
       </Modal>
     </div>
   );

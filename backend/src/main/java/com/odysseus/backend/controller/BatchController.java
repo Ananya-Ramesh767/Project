@@ -31,12 +31,19 @@ public class BatchController {
     }
 
     @PostMapping("/generate-sections")
-    public ResponseEntity<List<Batch>> generateSections(@RequestBody Map<String, Object> req) {
+    public ResponseEntity<?> generateSections(@RequestBody Map<String, Object> req) {
         String department = (String) req.getOrDefault("department", "Computer Science Engineering");
         Integer semester = req.get("semester") != null ? Integer.parseInt(req.get("semester").toString()) : 1;
         int sectionCount = req.get("sectionCount") != null ? Integer.parseInt(req.get("sectionCount").toString()) : 1;
         int strength = req.get("strength") != null ? Integer.parseInt(req.get("strength").toString()) : 60;
         String academicYear = (String) req.getOrDefault("academicYear", "2026-2027");
+
+        if (strength > 70) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "Maximum student strength is 70 students per section/classroom allocation. " +
+                            "Please split into additional sections or adjust student strength to 70 or below."
+            ));
+        }
 
         String deptCode = department;
         if (department.contains("Artificial Intelligence & Machine Learning") || department.contains("AI & ML")) deptCode = "CSE-AIML";
@@ -81,15 +88,25 @@ public class BatchController {
     }
 
     @PostMapping
-    public ResponseEntity<Batch> createBatch(@RequestBody Batch batch) {
+    public ResponseEntity<?> createBatch(@RequestBody Batch batch) {
+        if (batch.getStrength() != null && batch.getStrength() > 70) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "Maximum student strength is 70 students per section. Current value (" + batch.getStrength() + ") exceeds the institutional capacity."
+            ));
+        }
         Batch saved = batchRepository.save(batch);
         return ResponseEntity.ok(saved);
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<Batch> updateBatch(@PathVariable Long id, @RequestBody Batch batch) {
+    public ResponseEntity<?> updateBatch(@PathVariable Long id, @RequestBody Batch batch) {
         if (!batchRepository.existsById(id)) {
             return ResponseEntity.notFound().build();
+        }
+        if (batch.getStrength() != null && batch.getStrength() > 70) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "Maximum student strength is 70 students per section. Current value (" + batch.getStrength() + ") exceeds the institutional capacity."
+            ));
         }
         batch.setId(id);
         Batch saved = batchRepository.save(batch);

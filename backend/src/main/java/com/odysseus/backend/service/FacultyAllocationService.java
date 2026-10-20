@@ -208,6 +208,16 @@ public class FacultyAllocationService {
 
     // ── Candidate Selection ────────────────────────────────────────────────────
 
+    public boolean isSpecialTestSubject(Subject subject) {
+        if (subject == null) return false;
+        String name = subject.getSubjectName() != null ? subject.getSubjectName().toLowerCase() : "";
+        String code = subject.getSubjectCode() != null ? subject.getSubjectCode().toLowerCase() : "";
+        return name.contains("aptitude test") || name.contains("technical test")
+                || name.contains("aptitude & reasoning") || name.contains("technical assessment")
+                || code.contains("apt") || code.contains("tec")
+                || code.equals("aptitude") || code.equals("technical_test");
+    }
+
     /**
      * Build the candidate pool for a subject.
      * For department subjects: prefer faculty from the same department.
@@ -217,22 +227,47 @@ public class FacultyAllocationService {
                                               String department, boolean isDeptSubject) {
         List<Faculty> pool;
 
+        // Exclude HODs strictly from teaching candidate pool
+        List<Faculty> nonHodFaculty = allFaculty.stream()
+                .filter(f -> !f.isHod())
+                .collect(Collectors.toList());
+
+        // Special Rule for Semesters 3-8: Aptitude tests, technical tests, and equivalent activities
+        // MUST only be assigned to faculty from the particular main department selected for the class.
+        // Supporting departments (Math, Physics, Chemistry, English) MUST NOT be assigned to these activities.
+        boolean isSem3To8 = subject.getSemester() != null && subject.getSemester() >= 3 && subject.getSemester() <= 8;
+        if (isSem3To8 && isSpecialTestSubject(subject)) {
+            String targetDept = (department != null && !department.isBlank()) ? department : subject.getDepartment();
+            pool = nonHodFaculty.stream()
+                    .filter(f -> {
+                        String fDept = f.getDepartment() != null ? f.getDepartment() : "";
+                        boolean isSupporting = fDept.equalsIgnoreCase("Mathematics") || fDept.equalsIgnoreCase("Physics")
+                                || fDept.equalsIgnoreCase("Chemistry") || fDept.equalsIgnoreCase("English");
+                        return !isSupporting && DepartmentMatcher.matches(f.getDepartment(), targetDept);
+                    })
+                    .collect(Collectors.toList());
+
+            if (!pool.isEmpty()) {
+                return pool;
+            }
+        }
+
         if (isDeptSubject && department != null) {
             // Try department-specific eligible faculty first
-            pool = allFaculty.stream()
+            pool = nonHodFaculty.stream()
                     .filter(f -> isEligibleForSubject(f, subject))
                     .filter(f -> DepartmentMatcher.matches(f.getDepartment(), department))
                     .collect(Collectors.toList());
 
-            // If no dept-specific eligible faculty, broaden to all eligible
+            // If no dept-specific eligible faculty, broaden to all eligible non-HOD
             if (pool.isEmpty()) {
-                pool = allFaculty.stream()
+                pool = nonHodFaculty.stream()
                         .filter(f -> isEligibleForSubject(f, subject))
                         .collect(Collectors.toList());
             }
         } else {
-            // Common/non-department subject — all eligible faculty
-            pool = allFaculty.stream()
+            // Common/non-department subject — all eligible non-HOD faculty
+            pool = nonHodFaculty.stream()
                     .filter(f -> isEligibleForSubject(f, subject))
                     .collect(Collectors.toList());
         }
@@ -242,12 +277,13 @@ public class FacultyAllocationService {
 
     /**
      * Select the best faculty candidate for a (subject, section) pair.
-     * Criteria: eligible, within workload capacity, lowest current load.
+     * Criteria: eligible, non-HOD, within workload capacity, lowest current load.
      */
     private Faculty selectBestCandidate(List<Faculty> candidates, Map<Long, Integer> loadMap,
                                          Map<Long, Set<String>> unavailabilityMap,
                                          int weeklyHours, Subject subject, Batch batch) {
         return candidates.stream()
+                .filter(f -> !f.isHod())
                 .filter(f -> {
                     int currentLoad = loadMap.getOrDefault(f.getId(), 0);
                     int maxLoad = f.getMaxWeeklyLoad() != null ? f.getMaxWeeklyLoad() : 18;
@@ -259,10 +295,24 @@ public class FacultyAllocationService {
 
     /**
      * Check if a faculty member is eligible for a subject.
-     * Eligibility = explicit eligible subjects list OR specialization/subjectsHandled text match.
+     * Strictly excludes HODs.
+     * Evaluates explicit eligibility, cross-disciplinary department mapping, and specialization text matches.
      */
     public boolean isEligibleForSubject(Faculty f, Subject subject) {
         if (f == null || subject == null) return false;
+
+        // Strict HOD exclusion: HODs must not be assigned to regular classes
+        if (f.isHod()) return false;
+
+        // Special Rule for Semesters 3-8: Aptitude tests & technical tests cannot be assigned to supporting departments
+        boolean isSem3To8 = subject.getSemester() != null && subject.getSemester() >= 3 && subject.getSemester() <= 8;
+        if (isSem3To8 && isSpecialTestSubject(subject)) {
+            String fDept = f.getDepartment() != null ? f.getDepartment() : "";
+            if (fDept.equalsIgnoreCase("Mathematics") || fDept.equalsIgnoreCase("Physics")
+                    || fDept.equalsIgnoreCase("Chemistry") || fDept.equalsIgnoreCase("English")) {
+                return false;
+            }
+        }
 
         // 1. Explicit eligibility (primary — set via Faculty Master)
         if (f.getEligibleSubjects() != null) {
@@ -271,24 +321,66 @@ public class FacultyAllocationService {
             if (explicit) return true;
         }
 
-        // 2. Text-based match from subjectsHandled / specialization (secondary — from PDF upload)
+        String subName = subject.getSubjectName() != null ? subject.getSubjectName().toLowerCase() : "";
+        String subCode = subject.getSubjectCode() != null ? subject.getSubjectCode().toLowerCase() : "";
+        String fDept = f.getDepartment() != null ? f.getDepartment().toLowerCase() : "";
+
+        // 2. Cross-disciplinary subject-to-department/expertise mapping per institutional rules
+        // Chemistry subjects -> Chemistry faculty
+        if ((subName.contains("chemistry") || subName.contains("environmental")) && (fDept.contains("chem") || fDept.contains("science"))) {
+            return true;
+        }
+
+        // Physics & Semiconductor subjects -> Physics or appropriately qualified Electronics faculty
+        if ((subName.contains("physics") || subName.contains("semiconductor") || subName.contains("optics") || subName.contains("electromagnet"))
+                && (fDept.contains("phy") || fDept.contains("science") || fDept.contains("electronics") || fDept.contains("ece"))) {
+            return true;
+        }
+
+        // Mathematics subjects -> Mathematics faculty
+        if ((subName.contains("math") || subName.contains("discrete") || subName.contains("algebra")
+                || subName.contains("calculus") || subName.contains("probability") || subName.contains("statistics")
+                || subName.contains("numerical")) && (fDept.contains("math") || fDept.contains("science"))) {
+            return true;
+        }
+
+        // English / Communication subjects -> English or Humanities faculty
+        if ((subName.contains("english") || subName.contains("communication") || subName.contains("technical english")
+                || subName.contains("career skill")) && (fDept.contains("english") || fDept.contains("humanities"))) {
+            return true;
+        }
+
+        // Core CSE / IT subjects
+        boolean isCseSub = subName.contains("parallel processing") || subName.contains("theory of computation")
+                || subName.contains("data structure") || subName.contains("operating system")
+                || subName.contains("computer architecture") || subName.contains("computer network")
+                || subName.contains("compiler") || subName.contains("software engineering")
+                || subName.contains("database") || subName.contains("full stack")
+                || subName.contains("devops") || subName.contains("cloud")
+                || subName.contains("python") || subName.contains("java");
+
+        boolean isCseFaculty = DepartmentMatcher.matches(f.getDepartment(), "Computer Science Engineering")
+                || DepartmentMatcher.matches(f.getDepartment(), "Information Technology");
+
+        if (isCseSub && isCseFaculty) {
+            return true;
+        }
+
+        // 3. Text-based match from subjectsHandled / specialization (from PDF upload)
         String spec = (f.getSpecialization() != null ? f.getSpecialization() : "").toLowerCase();
         String handled = (f.getSubjectsHandled() != null ? f.getSubjectsHandled() : "").toLowerCase();
         String combined = spec + " " + handled;
 
         if (combined.isBlank()) return false;
 
-        String code = subject.getSubjectCode() != null ? subject.getSubjectCode().toLowerCase() : "";
-        String name = subject.getSubjectName() != null ? subject.getSubjectName().toLowerCase() : "";
+        if (!subCode.isEmpty() && combined.contains(subCode)) return true;
+        if (!subName.isEmpty() && combined.contains(subName)) return true;
 
-        if (!code.isEmpty() && combined.contains(code)) return true;
-        if (!name.isEmpty() && combined.contains(name)) return true;
-
-        // 3. Keyword match on significant words (≥4 chars, not stop-words)
+        // 4. Keyword match on significant words (≥4 chars, not stop-words)
         Set<String> stopWords = Set.of("intro", "introduction", "fundamentals", "applied",
                 "engineering", "science", "theory", "laboratory", "advanced",
                 "course", "basics", "studies", "principles");
-        for (String word : name.split("[^a-z0-9]+")) {
+        for (String word : subName.split("[^a-z0-9]+")) {
             if (word.length() >= 4 && !stopWords.contains(word) && combined.contains(word)) {
                 return true;
             }
