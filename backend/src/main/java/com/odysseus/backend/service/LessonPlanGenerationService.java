@@ -186,13 +186,13 @@ public class LessonPlanGenerationService {
 
         int startIndex = Math.floorMod(subjectOffering.getId() != null ? subjectOffering.getId() : 1L, AVAILABLE_WEEKDAYS.size());
 
-        patterns.put("THEORY", pickWeekdays(startIndex, subject.getWeeklyLecturePeriods(), 1, 0));
+        patterns.put("THEORY", pickWeekdays(startIndex, periodsPerWeekFor(subject, "THEORY"), 1, 0));
         if (subject.isRequiresLab()) {
             int labOccurrenceLength = subject.getLabDuration() != null ? subject.getLabDuration() : 2;
-            patterns.put("LAB", pickWeekdays(startIndex, subject.getWeeklyPracticalPeriods(), labOccurrenceLength, 1));
+            patterns.put("LAB", pickWeekdays(startIndex, periodsPerWeekFor(subject, "LAB"), labOccurrenceLength, 1));
         }
-        patterns.put("PROJECT", pickWeekdays(startIndex, subject.getWeeklyProjectPeriods(), 2, 2));
-        patterns.put("TUTORIAL", pickWeekdays(startIndex, subject.getWeeklyTutorialPeriods(), 1, 3));
+        patterns.put("PROJECT", pickWeekdays(startIndex, periodsPerWeekFor(subject, "PROJECT"), 2, 2));
+        patterns.put("TUTORIAL", pickWeekdays(startIndex, periodsPerWeekFor(subject, "TUTORIAL"), 1, 3));
 
         return patterns;
     }
@@ -217,13 +217,37 @@ public class LessonPlanGenerationService {
     private Integer periodsPerWeekFor(Subject subject, String track) {
         switch (track) {
             case "THEORY":
-                return subject.getWeeklyLecturePeriods();
+                if (subject.getWeeklyLecturePeriods() != null && subject.getWeeklyLecturePeriods() > 0) {
+                    return subject.getWeeklyLecturePeriods();
+                }
+                if (subject.getTheoryCredits() > 0) {
+                    return (int) Math.round(subject.getTheoryCredits());
+                }
+                if (!subject.isRequiresLab() && subject.getCalculatedWeeklyHours() > 0) {
+                    return (int) Math.round(subject.getCalculatedWeeklyHours());
+                }
+                return null;
             case "LAB":
-                return subject.getWeeklyPracticalPeriods();
+                if (subject.getWeeklyPracticalPeriods() != null && subject.getWeeklyPracticalPeriods() > 0) {
+                    return subject.getWeeklyPracticalPeriods();
+                }
+                if (subject.getLabCredits() > 0) {
+                    return (int) Math.round(subject.getLabCredits() * 2);
+                }
+                if (subject.isRequiresLab()) {
+                    return subject.getLabDuration() != null ? subject.getLabDuration() : 2;
+                }
+                return null;
             case "PROJECT":
                 return subject.getWeeklyProjectPeriods();
             case "TUTORIAL":
-                return subject.getWeeklyTutorialPeriods();
+                if (subject.getWeeklyTutorialPeriods() != null && subject.getWeeklyTutorialPeriods() > 0) {
+                    return subject.getWeeklyTutorialPeriods();
+                }
+                if (subject.getTutorialCredits() > 0) {
+                    return (int) Math.round(subject.getTutorialCredits());
+                }
+                return null;
             default:
                 return null;
         }

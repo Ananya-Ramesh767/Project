@@ -537,6 +537,27 @@ export default function SectionTimetablePage({ user }) {
     setMessage({ type: 'success', text: `Downloaded complete PDF for all ${deptBatches.length} sections.` });
   };
 
+  const currentBatch = batches.find(b => b.id === selectedBatchId) || batches[0];
+  const assignedTheoryRoom = (currentBatch?.assignedRoomCode && rooms.find(r => r.roomCode === currentBatch.assignedRoomCode))
+    || timetable.find(t => t.room && t.sessionType === 'THEORY')?.room
+    || timetable.find(t => t.room && t.room.roomType !== 'LAB')?.room
+    || null;
+
+  const assignedLabRooms = React.useMemo(() => {
+    const map = new Map();
+    timetable.forEach(t => {
+      if (t.room && (t.sessionType === 'LAB' || t.room.roomType === 'LAB')) {
+        if (!map.has(t.room.roomCode)) {
+          map.set(t.room.roomCode, {
+            room: t.room,
+            subject: t.subject?.subjectName || t.subject?.subjectCode || 'Laboratory Practical'
+          });
+        }
+      }
+    });
+    return Array.from(map.values());
+  }, [timetable]);
+
   return (
     <div>
       {/* Top Header & Section Selector */}
@@ -562,7 +583,7 @@ export default function SectionTimetablePage({ user }) {
                 border: '1px solid var(--border-accent)',
                 borderRadius: '8px',
                 padding: '0.5rem 1rem',
-                fontSize: '0.95rem',
+                fontSize: '0.92rem',
                 fontWeight: 700,
                 outline: 'none',
                 cursor: 'pointer'
@@ -570,7 +591,7 @@ export default function SectionTimetablePage({ user }) {
             >
               {batches.map(b => (
                 <option key={b.id} value={b.id}>
-                  {b.batchName} (Sem {b.semester} &bull; {b.department})
+                  {b.department} — Sem {b.semester} — Section {b.section || b.batchName} ({b.strength || 60} students)
                 </option>
               ))}
             </select>
@@ -643,6 +664,93 @@ export default function SectionTimetablePage({ user }) {
           <button onClick={() => setMessage(null)} style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer' }}>&times;</button>
         </div>
       )}
+
+      {/* Assigned Classrooms at the Top (Requirement 25) */}
+      <div className="glass-panel" style={{ padding: '1.25rem 1.5rem', marginBottom: '1.5rem', borderLeft: '4px solid #10b981' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            <DoorOpen size={20} style={{ color: '#10b981' }} />
+            <div>
+              <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-main)' }}>
+                Assigned Classrooms &amp; Laboratories — Section {currentBatch?.section || currentBatch?.batchName || 'A'}
+              </h2>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                {currentBatch?.department || 'CSE'} &bull; Semester {currentBatch?.semester || 3} &bull; Strength: {currentBatch?.strength || 60} Students (Max 70 limit)
+              </span>
+            </div>
+          </div>
+          <span className={`badge ${assignedTheoryRoom ? 'badge-success' : 'badge-warning'}`}>
+            {assignedTheoryRoom ? 'Classroom Allocated' : 'Allocation Pending'}
+          </span>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem' }}>
+          {/* Primary Lecture Room */}
+          <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', padding: '0.85rem' }}>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 700, textTransform: 'uppercase', marginBottom: '0.35rem' }}>
+              Primary Classroom (Lecture / Theory)
+            </div>
+            {assignedTheoryRoom ? (
+              <div>
+                <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#10b981' }}>
+                  {assignedTheoryRoom.roomCode}
+                </div>
+                <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-main)', marginTop: '2px' }}>
+                  {assignedTheoryRoom.roomName || assignedTheoryRoom.roomCode}
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  {assignedTheoryRoom.blockName || 'Main Block'} &bull; Floor {assignedTheoryRoom.floorNumber ?? 1}
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Capacity:</span>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 700, color: (assignedTheoryRoom.capacity >= (currentBatch?.strength || 0)) ? '#34d399' : '#f87171' }}>
+                    {assignedTheoryRoom.capacity} seats ({assignedTheoryRoom.capacity >= (currentBatch?.strength || 0) ? 'Adequate' : 'Under Capacity'})
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', padding: '0.5rem 0' }}>
+                No theory classroom allocated yet.
+              </div>
+            )}
+          </div>
+
+          {/* Assigned Labs */}
+          {assignedLabRooms.length > 0 ? (
+            assignedLabRooms.map((l, li) => (
+              <div key={li} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', padding: '0.85rem' }}>
+                <div style={{ fontSize: '0.75rem', color: '#38bdf8', fontWeight: 700, textTransform: 'uppercase', marginBottom: '0.35rem' }}>
+                  Laboratory Practical Space
+                </div>
+                <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#38bdf8' }}>
+                  {l.room.roomCode}
+                </div>
+                <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-main)', marginTop: '2px' }}>
+                  {l.subject}
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  {l.room.blockName || 'Lab Complex'} &bull; Floor {l.room.floorNumber ?? 0}
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Lab Capacity:</span>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#38bdf8' }}>
+                    {l.room.capacity} workstations
+                  </span>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px dashed rgba(255,255,255,0.08)', borderRadius: '8px', padding: '0.85rem', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 700, textTransform: 'uppercase' }}>
+                Laboratory Assignments
+              </div>
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.35rem 0 0 0' }}>
+                Subject labs (Chemistry, Physics, Computer Labs) are scheduled as designated periods in the weekly timetable.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* Summary Metrics Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>

@@ -21,8 +21,8 @@ const STEPS = [
   { n: 3,  title: 'Faculty Master',       icon: Users,         path: '/faculty',    desc: 'Manage faculty and subject eligibility' },
   { n: 4,  title: 'Room Master',          icon: DoorOpen,      path: '/rooms',      desc: 'Configure lecture halls and labs' },
   { n: 5,  title: 'Batches & Sections',   icon: Layers,        path: '/batches',    desc: 'Define student sections and strength' },
-  { n: 6,  title: 'Subject Offerings',    icon: BookMarked,    path: '/offerings',  desc: 'Map subjects to batches and assign faculty' },
-  { n: 7,  title: 'Year Calendar',       icon: Calendar,      path: '/calendar',   desc: 'Configure term dates and holidays' },
+  { n: 6,  title: 'Subject Offerings',    icon: BookMarked,    path: '/offerings',  desc: 'Map subjects to sections with faculty' },
+  { n: 7,  title: 'Year Calendar',        icon: Calendar,      path: '/calendar',   desc: 'Configure term dates and holidays' },
   { n: 8,  title: 'Timeslots',            icon: Clock,         path: '/timeslots',  desc: 'View college period schedule' },
   { n: 9,  title: 'Data Readiness',       icon: ShieldCheck,   path: '/readiness',  desc: 'Validate all data before scheduling' },
   { n: 10, title: 'Generate Timetable',   icon: PlayCircle,    path: '/generate',   desc: 'Trigger the constraint scheduler' },
@@ -32,7 +32,7 @@ export default function AdminDashboard({ user }) {
   const [selectedDept, setSelectedDept] = useState(() => localStorage.getItem('academicContext_dept') || '');
   const [selectedSemester, setSelectedSemester] = useState(() => localStorage.getItem('academicContext_semester') || '');
 
-  const [stats, setStats] = useState({ subjects: 0, faculty: 0, rooms: 0, batches: 0, offerings: 0 });
+  const [stats, setStats] = useState({ subjects: 0, faculty: 0, rooms: 0, batches: 0 });
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -60,7 +60,7 @@ export default function AdminDashboard({ user }) {
   const loadStats = async () => {
     // If context is unselected, show 0 rather than global totals
     if (!selectedDept || !selectedSemester) {
-      setStats({ subjects: 0, faculty: 0, rooms: 0, batches: 0, offerings: 0 });
+      setStats({ subjects: 0, faculty: 0, rooms: 0, batches: 0 });
       return;
     }
 
@@ -70,33 +70,23 @@ export default function AdminDashboard({ user }) {
       const deptParam = encodeURIComponent(selectedDept);
       const semParam = encodeURIComponent(selectedSemester);
 
-      const [s, f, r, b, o] = await Promise.all([
+      const [s, f, r, b] = await Promise.all([
         fetch(`/api/admin/subjects?department=${deptParam}&semester=${semParam}`, { headers: h }).then(r => r.ok ? r.json() : []),
         fetch(`/api/admin/faculty?department=${deptParam}`, { headers: h }).then(r => r.ok ? r.json() : []),
         fetch('/api/admin/rooms', { headers: h }).then(r => r.ok ? r.json() : []),
-        fetch(`/api/admin/batches?department=${deptParam}&semester=${semParam}`, { headers: h }).then(r => r.ok ? r.json() : []),
-        fetch(`/api/admin/offerings?department=${deptParam}&semester=${semParam}`, { headers: h }).then(r => r.ok ? r.json() : []),
+        fetch(`/api/admin/batches?department=${deptParam}&semester=${semParam}`, { headers: h }).then(r => r.ok ? r.json() : [])
       ]);
 
-      // Calculate context-specific rooms:
-      // If rooms are assigned to departments, count matched + shared (null/empty dept);
-      // otherwise, retain institutional room capacity per requirement 11.
-      let contextRooms = r.length;
-      const deptRooms = r.filter(rm => rm.department && rm.department.trim() !== '');
-      if (deptRooms.length > 0) {
-        contextRooms = r.filter(rm => !rm.department || rm.department.toLowerCase().includes(selectedDept.toLowerCase()) || selectedDept.toLowerCase().includes(rm.department.toLowerCase())).length;
-      }
-
+      // Rooms and labs are institution-wide shared resources (Part 4 requirement 10)
       setStats({
         subjects: s.length,
         faculty: f.length,
-        rooms: contextRooms,
-        batches: b.length,
-        offerings: o.length
+        rooms: r.length,
+        batches: b.length
       });
     } catch (e) {
       console.error('Failed to load dashboard stats:', e);
-      setStats({ subjects: 0, faculty: 0, rooms: 0, batches: 0, offerings: 0 });
+      setStats({ subjects: 0, faculty: 0, rooms: 0, batches: 0 });
     } finally {
       setLoading(false);
     }
@@ -107,7 +97,7 @@ export default function AdminDashboard({ user }) {
     { label: 'Faculty Members',  value: stats.faculty,   icon: Users,      color: ACCENT[1] },
     { label: 'Rooms & Labs',     value: stats.rooms,     icon: DoorOpen,   color: ACCENT[2] },
     { label: 'Batches',          value: stats.batches,   icon: Layers,     color: ACCENT[3] },
-    { label: 'Offerings',        value: stats.offerings, icon: BookMarked, color: ACCENT[4] },
+    { label: 'Required Staff',   value: stats.batches,   icon: ShieldCheck, color: ACCENT[4] },
   ];
 
   return (
@@ -120,9 +110,11 @@ export default function AdminDashboard({ user }) {
             Welcome, {user?.fullName || user?.username}. Select an academic context to view statistics and manage timetables.
           </p>
         </div>
-        <Link to="/readiness" className="btn btn-primary">
-          <CheckCircle2 size={17} /> Readiness Check
-        </Link>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+          <Link to="/readiness" className="btn btn-primary">
+            <CheckCircle2 size={17} /> Readiness Check
+          </Link>
+        </div>
       </div>
 
       {/* Academic Context Selector */}
@@ -190,7 +182,7 @@ export default function AdminDashboard({ user }) {
       </div>
 
       {/* Metrics */}
-      <div className="grid-4" style={{ gridTemplateColumns: 'repeat(5,1fr)', marginBottom: '2.5rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '1rem', marginBottom: '2.5rem' }}>
         {METRICS.map(m => {
           const Icon = m.icon;
           return (

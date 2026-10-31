@@ -38,6 +38,19 @@ public class FacultyController {
         return ResponseEntity.ok(list);
     }
 
+    @GetMapping("/department-counts")
+    public ResponseEntity<Map<String, Long>> getDepartmentCounts() {
+        List<Faculty> allFaculty = facultyRepository.findByActiveTrue();
+        Map<String, Long> counts = new LinkedHashMap<>();
+        for (Faculty f : allFaculty) {
+            String dept = f.getDepartment();
+            if (dept != null && !dept.isBlank()) {
+                counts.put(dept, counts.getOrDefault(dept, 0L) + 1);
+            }
+        }
+        return ResponseEntity.ok(counts);
+    }
+
     @GetMapping("/{id}")
     public ResponseEntity<Faculty> getFacultyById(@PathVariable Long id) {
         return facultyRepository.findById(id)
@@ -271,10 +284,14 @@ public class FacultyController {
             @RequestParam(required = false, defaultValue = "") String department,
             @RequestParam(required = false) Integer semester) {
 
-        // Get subjects for this department
+        // Treat "ALL" as wildcard (no department filtering)
+        boolean allDept = department == null || department.isBlank() || department.equalsIgnoreCase("ALL");
+        String deptFilter = allDept ? "" : department;
+
+        // Get subjects for this department (or all if wildcard)
         List<Subject> subjects = subjectRepository.findAll().stream()
                 .filter(Subject::isActive)
-                .filter(s -> department.isEmpty() || com.odysseus.backend.util.DepartmentMatcher.matches(s.getDepartment(), department))
+                .filter(s -> deptFilter.isEmpty() || com.odysseus.backend.util.DepartmentMatcher.matches(s.getDepartment(), deptFilter))
                 .filter(s -> semester == null || Objects.equals(s.getSemester(), semester))
                 .sorted(Comparator.comparing(Subject::getSubjectCode))
                 .collect(Collectors.toList());
@@ -282,16 +299,10 @@ public class FacultyController {
         // Get all active faculty
         List<Faculty> allActiveFaculty = facultyRepository.findByActiveTrue();
 
-        // Department-relevant faculty = those whose department matches OR who already have eligible subjects in this dept
-        List<Faculty> deptFaculty = allActiveFaculty.stream()
-                .filter(f -> department.isEmpty() || com.odysseus.backend.util.DepartmentMatcher.matches(f.getDepartment(), department)
-                        || f.getEligibleSubjects().stream().anyMatch(s -> com.odysseus.backend.util.DepartmentMatcher.matches(s.getDepartment(), department)))
-                .collect(Collectors.toList());
-
-        // Active batches for section assignment
+        // Active batches for section assignment (filtered by department if not wildcard)
         List<Batch> batches = batchRepository.findAll().stream()
                 .filter(Batch::isActive)
-                .filter(b -> department.isEmpty() || com.odysseus.backend.util.DepartmentMatcher.matches(b.getDepartment(), department))
+                .filter(b -> deptFilter.isEmpty() || com.odysseus.backend.util.DepartmentMatcher.matches(b.getDepartment(), deptFilter))
                 .filter(b -> semester == null || Objects.equals(b.getSemester(), semester))
                 .sorted(Comparator.comparing(Batch::getBatchName))
                 .collect(Collectors.toList());
@@ -319,11 +330,30 @@ public class FacultyController {
         List<Map<String, Object>> proposals = new ArrayList<>();
 
         for (Subject subject : subjects) {
-            // Eligible faculty = those who have this subject in eligibleSubjects OR whose specialization/subjectsHandled matches
-            List<Faculty> eligible = deptFaculty.stream()
-                    .filter(f -> f.getEligibleSubjects().stream().anyMatch(s -> Objects.equals(s.getId(), subject.getId()))
-                            || matchesSpecializationOrSubjects(f, subject))
+            String targetDept = (subject.getFacultyDepartment() != null && !subject.getFacultyDepartment().isBlank())
+                    ? subject.getFacultyDepartment()
+                    : subject.getDepartment();
+
+            // Determine candidate faculty pool: prioritize teaching department (e.g. Math for Discrete Math, ECE for Embedded Systems)
+            List<Faculty> deptMatchedFaculty = allActiveFaculty.stream()
+                    .filter(f -> !f.isHod())
+                    .filter(f -> targetDept != null && !targetDept.isBlank() && com.odysseus.backend.util.DepartmentMatcher.matches(f.getDepartment(), targetDept))
                     .collect(Collectors.toList());
+
+            List<Faculty> candidatePool = !deptMatchedFaculty.isEmpty() ? deptMatchedFaculty : allActiveFaculty.stream()
+                    .filter(f -> !f.isHod())
+                    .filter(f -> allocationService.isEligibleForSubject(f, subject))
+                    .collect(Collectors.toList());
+
+            List<Faculty> eligible = candidatePool.stream()
+                    .filter(f -> f.getEligibleSubjects().stream().anyMatch(s -> Objects.equals(s.getId(), subject.getId()))
+                            || allocationService.isEligibleForSubject(f, subject)
+                            || matchesSpecializationOrSubjects(f, subject)
+                            || (targetDept != null && com.odysseus.backend.util.DepartmentMatcher.matches(f.getDepartment(), targetDept)))
+                    .collect(Collectors.toList());
+            if (eligible.isEmpty()) {
+                eligible = candidatePool;
+            }
 
             List<Batch> relevantSubjectBatches = batches.stream()
                     .filter(b -> subject.getSemester() == null || Objects.equals(b.getSemester(), subject.getSemester()))
@@ -722,27 +752,73 @@ public class FacultyController {
         List<String> updatedIds = new ArrayList<>();
 
         for (Map<String, Object> map : facultyList) {
-            String empId = (String) map.get("employeeId");
-            if (empId == null || empId.trim().isEmpty()) continue;
-
-            Optional<Faculty> existing = facultyRepository.findByEmployeeId(empId);
-            Faculty f;
-            if (existing.isPresent()) {
-                f = existing.get();
-                updatedIds.add(empId);
-            } else {
-                f = new Faculty();
-                f.setEmployeeId(empId);
-                f.setEligibleSubjects(new HashSet<>());
+            String name = (String) map.get("name");
+            if (name == null || name.trim().isEmpty()) {
+                name = "Faculty";
             }
-            f.setName((String) map.get("name"));
-            f.setEmail((String) map.get("email"));
+            name = name.trim();
 
             String dept = (String) map.get("department");
             if (dept == null || dept.trim().isEmpty()) {
                 dept = "Computer Science Engineering";
             }
-            f.setDepartment(dept);
+            dept = dept.trim();
+
+            // 1. Try to find existing faculty by normalized name + department (idempotent re-upload)
+            String normName = name.toLowerCase().replaceAll("\\s+", " ").trim();
+            final String finalName = name;
+            final String finalDept = dept;
+            Optional<Faculty> existingByNameDept = facultyRepository.findAll().stream()
+                    .filter(f -> f.getName() != null
+                            && f.getName().toLowerCase().replaceAll("\\s+", " ").trim().equals(normName)
+                            && com.odysseus.backend.util.DepartmentMatcher.matches(f.getDepartment(), finalDept))
+                    .findFirst();
+
+            Faculty f;
+            if (existingByNameDept.isPresent()) {
+                // Re-upload of same department — update existing record
+                f = existingByNameDept.get();
+                updatedIds.add(f.getEmployeeId());
+            } else {
+                // 2. Check if supplied employeeId exists
+                String empId = (String) map.get("employeeId");
+                if (empId != null && !empId.trim().isEmpty()) {
+                    Optional<Faculty> existingByEmpId = facultyRepository.findByEmployeeId(empId.trim());
+                    if (existingByEmpId.isPresent()) {
+                        Faculty existingFac = existingByEmpId.get();
+                        // Same department — treat as update
+                        if (com.odysseus.backend.util.DepartmentMatcher.matches(existingFac.getDepartment(), finalDept)) {
+                            f = existingFac;
+                            updatedIds.add(empId);
+                        } else {
+                            // DIFFERENT department has this ID — generate a new unique one
+                            empId = generateUniqueEmployeeId(finalDept);
+                            f = new Faculty();
+                            f.setEmployeeId(empId);
+                            f.setEligibleSubjects(new HashSet<>());
+                        }
+                    } else {
+                        // New faculty with unused ID
+                        f = new Faculty();
+                        f.setEmployeeId(empId.trim());
+                        f.setEligibleSubjects(new HashSet<>());
+                    }
+                } else {
+                    // No employeeId provided — generate a unique one
+                    String newEmpId = generateUniqueEmployeeId(finalDept);
+                    f = new Faculty();
+                    f.setEmployeeId(newEmpId);
+                    f.setEligibleSubjects(new HashSet<>());
+                }
+            }
+
+            f.setName(finalName);
+            String email = (String) map.get("email");
+            if (email == null || email.trim().isEmpty() || !email.contains("@")) {
+                email = finalName.toLowerCase().replaceAll("[^a-z0-9]", ".") + "@odysseus.edu";
+            }
+            f.setEmail(email);
+            f.setDepartment(finalDept);
 
             if (map.containsKey("designation")) {
                 f.setDesignation((String) map.get("designation"));
@@ -785,6 +861,22 @@ public class FacultyController {
                 "savedFaculty", savedList,
                 "updatedIds", updatedIds
         ));
+    }
+
+    /**
+     * Generates a unique employee ID scoped to a department.
+     * Format: {DEPT_CODE}-FAC-{timestamp_suffix}
+     */
+    private String generateUniqueEmployeeId(String department) {
+        String deptCode = getDeptCode(department);
+        String candidate;
+        int attempts = 0;
+        do {
+            long suffix = System.currentTimeMillis() % 100000 + (long)(Math.random() * 1000);
+            candidate = String.format("%s-FAC-%05d", deptCode, suffix);
+            attempts++;
+        } while (facultyRepository.existsByEmployeeId(candidate) && attempts < 50);
+        return candidate;
     }
 
     private void ensureDepartmentSections(String department, Integer semester) {

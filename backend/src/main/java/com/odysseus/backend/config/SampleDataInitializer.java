@@ -57,10 +57,10 @@ public class SampleDataInitializer implements CommandLineRunner {
     }
 
     private void cleanLegacyDemoRooms() {
-        assignmentRepository.deleteAll();
-        entryRepository.deleteAll();
-        offeringRepository.deleteAll();
-
+        // Only remove specific legacy/demo room codes.
+        // Do NOT use deleteAll() on assignments, entries, or offerings —
+        // that would destroy real user data and violate FK constraints
+        // from lesson_plans, timetable_assignments, etc.
         List<String> legacyCodes = List.of(
                 "TEST-PERSIST-101", "CSE-A101", "CSE-A102", "CSE-A103", "CSE-LAB1",
                 "A-101", "A-102", "A-201", "A-LAB-1",
@@ -75,59 +75,16 @@ public class SampleDataInitializer implements CommandLineRunner {
         }
     }
 
+
     private void cleanDemoSubjectsAndOfferings() {
-        // Master Prompt Section 3.1 & 14.1:
-        // "Remove all prebuilt, sample, demo, and testing subjects from the application and database seed data.
-        // The Subjects and Credits table must initially be empty until the admin uploads a curriculum document."
-        List<String> demoCodes = List.of(
-                "2311CSC301T", "2311CSC302T", "2311MAT301T", "2311CSC303T", "2311CSC304L",
-                "2311CSE905T", "2321CSE906T", "2311CE0901T", "2311CSC501J", "2311CSC502J",
-                "2311CSC503R", "2311SDSA501L", "2321LIB301", "2321CSC304R"
-        );
-
-        for (String code : demoCodes) {
-            subjectRepository.findBySubjectCode(code).ifPresent(subject -> {
-                // Delete child offerings
-                offeringRepository.findAll().stream()
-                        .filter(o -> o.getSubject() != null && o.getSubject().getId().equals(subject.getId()))
-                        .forEach(offeringRepository::delete);
-
-                // Delete child assignments
-                assignmentRepository.findAll().stream()
-                        .filter(a -> a.getSubject() != null && a.getSubject().getId().equals(subject.getId()))
-                        .forEach(assignmentRepository::delete);
-
-                entryRepository.findAll().stream()
-                        .filter(e -> e.getSubjectId() != null && e.getSubjectId().equals(subject.getId()))
-                        .forEach(entryRepository::delete);
-
-                // Unlink from faculty
-                facultyRepository.findAll().forEach(f -> {
-                    if (f.getEligibleSubjects() != null && f.getEligibleSubjects().removeIf(s -> s.getId().equals(subject.getId()))) {
-                        facultyRepository.save(f);
-                    }
-                });
-
-                subjectRepository.delete(subject);
-            });
+        // Clean demo faculty (employeeId starting with F-DEMO-) if present
+        try {
+            facultyRepository.findAll().stream()
+                    .filter(f -> f.getEmployeeId() != null && f.getEmployeeId().startsWith("F-DEMO-"))
+                    .forEach(facultyRepository::delete);
+        } catch (Exception ex) {
+            log.warn("Could not clean demo faculty: {}", ex.getMessage());
         }
-
-        // Clean demo batches if only demo batches exist
-        List<String> demoBatchNames = List.of("CSE-A", "CSE-B", "CSE-Sem3-A", "CSE-Sem3-B");
-        for (String bName : demoBatchNames) {
-            batchRepository.findAll().stream()
-                    .filter(b -> bName.equalsIgnoreCase(b.getBatchName()))
-                    .forEach(batch -> {
-                        offeringRepository.findByBatchIdAndActiveTrue(batch.getId()).forEach(offeringRepository::delete);
-                        assignmentRepository.deleteByBatchId(batch.getId());
-                        batchRepository.delete(batch);
-                    });
-        }
-
-        // Clean demo faculty (employeeId starting with F-DEMO-)
-        facultyRepository.findAll().stream()
-                .filter(f -> f.getEmployeeId() != null && f.getEmployeeId().startsWith("F-DEMO-"))
-                .forEach(facultyRepository::delete);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

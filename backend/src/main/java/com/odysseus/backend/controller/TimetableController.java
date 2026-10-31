@@ -27,6 +27,7 @@ public class TimetableController {
     private final FacultyRepository facultyRepository;
     private final RoomRepository roomRepository;
     private final RoomChangeHistoryRepository roomChangeHistoryRepository;
+    private final TimetableEntryRepository entryRepository;
 
     @GetMapping("/batch/{batchId}")
     public ResponseEntity<List<TimetableAssignment>> getTimetableForBatch(@PathVariable Long batchId) {
@@ -121,6 +122,30 @@ public class TimetableController {
         assignment.setRoom(newRoom);
         timetableRepository.save(assignment);
 
+        // Update corresponding entries
+        if (entryRepository != null && assignment.getBatch() != null) {
+            entryRepository.findAll().stream()
+                    .filter(e -> java.util.Objects.equals(e.getBatchId(), assignment.getBatch().getId())
+                            && java.util.Objects.equals(e.getDayOfWeek(), assignment.getDayOfWeek())
+                            && java.util.Objects.equals(e.getPeriodNumber(), assignment.getPeriodNumber()))
+                    .forEach(e -> {
+                        e.setRoomId(newRoom.getId());
+                        e.setRoomCode(newRoom.getRoomCode());
+                        entryRepository.save(e);
+                    });
+        }
+
+        // Update batch assigned room
+        Batch batch = assignment.getBatch();
+        if (batch != null && (batch.getAssignedRoomCode() == null || (originalRoom != null && batch.getAssignedRoomCode().equals(originalRoom.getRoomCode())))) {
+            batch.setAssignedRoomCode(newRoom.getRoomCode());
+            batch.setAssignedBlockName(newRoom.getBlockName());
+            batch.setAssignedFloorNumber(newRoom.getFloorNumber());
+            batchRepository.save(batch);
+            newRoom.setAssignedSection(batch.getBatchName());
+            roomRepository.save(newRoom);
+        }
+
         return ResponseEntity.ok(Map.of(
                 "message", "Classroom successfully changed to " + newRoom.getRoomCode(),
                 "historyId", history.getId(),
@@ -143,6 +168,14 @@ public class TimetableController {
                 a.setRoom(history.getOriginalRoom());
                 timetableRepository.save(a);
             }
+        }
+
+        Batch batch = history.getBatch();
+        if (batch != null && history.getOriginalRoom() != null) {
+            batch.setAssignedRoomCode(history.getOriginalRoom().getRoomCode());
+            batch.setAssignedBlockName(history.getOriginalRoom().getBlockName());
+            batch.setAssignedFloorNumber(history.getOriginalRoom().getFloorNumber());
+            batchRepository.save(batch);
         }
 
         history.setActive(false);

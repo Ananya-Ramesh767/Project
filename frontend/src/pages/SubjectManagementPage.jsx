@@ -30,12 +30,6 @@ export default function SubjectManagementPage({ user }) {
   const [pasteText, setPasteText] = useState('');
   const [pageSuccess, setPageSuccess] = useState('');
 
-  // Department Faculty List Inspection Modal
-  const [viewingFacultyDept, setViewingFacultyDept] = useState(null);
-  const [deptFacultyList, setDeptFacultyList] = useState([]);
-  const [deptFacultyLoading, setDeptFacultyLoading] = useState(false);
-  const [showFacultyListModal, setShowFacultyListModal] = useState(false);
-
   const getShortDeptName = (dept) => {
     if (!dept) return '';
     if (dept.toLowerCase().includes('computer science')) return 'CSE';
@@ -48,29 +42,6 @@ export default function SubjectManagementPage({ user }) {
     if (dept.toLowerCase().includes('mechanical')) return 'MECH';
     if (dept.toLowerCase().includes('civil')) return 'CIVIL';
     return dept.split(' ')[0];
-  };
-
-  const handleViewFacultyList = async (deptName) => {
-    if (!deptName) return;
-    setViewingFacultyDept(deptName);
-    setDeptFacultyLoading(true);
-    setShowFacultyListModal(true);
-    try {
-      const res = await fetch(`/api/admin/faculty?department=${encodeURIComponent(deptName)}`, {
-        headers: { 'Authorization': `Bearer ${user.token}` }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setDeptFacultyList(data || []);
-      } else {
-        setDeptFacultyList([]);
-      }
-    } catch (e) {
-      console.error('Failed to load faculty list:', e);
-      setDeptFacultyList([]);
-    } finally {
-      setDeptFacultyLoading(false);
-    }
   };
 
   const [form, setForm] = useState({
@@ -438,7 +409,7 @@ export default function SubjectManagementPage({ user }) {
                   <th style={{ minWidth: '220px' }}>Subject Name</th>
                   <th style={{ minWidth: '110px' }}>Type</th>
                   <th style={{ minWidth: '180px' }}>Faculty Department</th>
-                  <th style={{ minWidth: '150px' }}>Faculty Roster</th>
+
                   <th style={{ minWidth: '60px', textAlign: 'center' }}>Th</th>
                   <th style={{ minWidth: '60px', textAlign: 'center' }}>Lab</th>
                   <th style={{ minWidth: '60px', textAlign: 'center' }}>Tut</th>
@@ -481,17 +452,7 @@ export default function SubjectManagementPage({ user }) {
                           ))}
                         </select>
                       </td>
-                      <td>
-                        <button
-                          type="button"
-                          className="btn btn-secondary"
-                          style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
-                          onClick={() => handleViewFacultyList(assignedDept)}
-                        >
-                          <BookOpen size={12} />
-                          View {getShortDeptName(assignedDept)} Faculty List
-                        </button>
-                      </td>
+
                       <td style={{ textAlign: 'center' }}>{sub.theoryCredits ?? 0}</td>
                       <td style={{ textAlign: 'center' }}>{sub.labCredits ?? 0}</td>
                       <td style={{ textAlign: 'center' }}>{sub.tutorialCredits ?? 0}</td>
@@ -959,7 +920,7 @@ export default function SubjectManagementPage({ user }) {
                         <th style={{ minWidth: '220px' }}>Name</th>
                         <th style={{ minWidth: '110px' }}>Type</th>
                         <th style={{ minWidth: '180px' }}>Faculty Department</th>
-                        <th style={{ minWidth: '150px' }}>Faculty Roster</th>
+
                         <th style={{ minWidth: '55px', textAlign: 'center' }}>Th</th>
                         <th style={{ minWidth: '55px', textAlign: 'center' }}>Lab</th>
                         <th style={{ minWidth: '55px', textAlign: 'center' }}>Tut</th>
@@ -1031,17 +992,7 @@ export default function SubjectManagementPage({ user }) {
                                 ))}
                               </select>
                             </td>
-                            <td>
-                              <button
-                                type="button"
-                                className="btn btn-secondary"
-                                style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
-                                onClick={() => handleViewFacultyList(assignedDept)}
-                              >
-                                <BookOpen size={12} />
-                                View {getShortDeptName(assignedDept)} Faculty List
-                              </button>
-                            </td>
+
                             <td style={{ textAlign: 'center' }}>
                               <input
                                 type="number"
@@ -1116,88 +1067,6 @@ export default function SubjectManagementPage({ user }) {
                 </div>
               </div>
             )}
-      </Modal>
-
-      {/* Modal - View Department Faculty List */}
-      <Modal
-        isOpen={showFacultyListModal}
-        onClose={() => setShowFacultyListModal(false)}
-        title={`Faculty List — ${viewingFacultyDept || 'Department'}`}
-        maxWidth="850px"
-      >
-        <div style={{ marginBottom: '1rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-            <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-              Saved faculty roster for <strong>{viewingFacultyDept}</strong> used for automatic subject allocations.
-            </span>
-            <span className="badge badge-info" style={{ fontSize: '0.75rem' }}>
-              {deptFacultyList.length} Faculty Member{deptFacultyList.length === 1 ? '' : 's'}
-            </span>
-          </div>
-
-          {deptFacultyLoading ? (
-            <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-              Loading {viewingFacultyDept} faculty records...
-            </div>
-          ) : deptFacultyList.length === 0 ? (
-            <div className="alert alert-warning" style={{ padding: '1rem', lineHeight: '1.5' }}>
-              <div style={{ fontWeight: 600, marginBottom: '0.3rem' }}>
-                ⚠️ No Faculty Records Found for {viewingFacultyDept}
-              </div>
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.8rem' }}>
-                The curriculum contains subjects requiring faculty from <strong>{viewingFacultyDept}</strong>.
-                To enable automatic faculty allocation, please upload the <strong>{viewingFacultyDept}</strong> faculty roster once in Faculty Master.
-              </div>
-              <button
-                type="button"
-                className="btn btn-primary"
-                style={{ fontSize: '0.8rem', padding: '0.35rem 0.8rem' }}
-                onClick={() => {
-                  setShowFacultyListModal(false);
-                  window.location.hash = '#/faculty';
-                }}
-              >
-                Go to Faculty Master Upload
-              </button>
-            </div>
-          ) : (
-            <div className="data-table-container" style={{ maxHeight: '360px', overflowY: 'auto' }}>
-              <table className="data-table" style={{ width: '100%', fontSize: '0.82rem' }}>
-                <thead>
-                  <tr>
-                    <th>Emp ID</th>
-                    <th>Full Name</th>
-                    <th>Designation</th>
-                    <th>Specialization / Handled</th>
-                    <th style={{ textAlign: 'center' }}>Max Weekly Load</th>
-                    <th style={{ textAlign: 'center' }}>HOD</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {deptFacultyList.map(f => (
-                    <tr key={f.id || f.employeeId}>
-                      <td><strong>{f.employeeId}</strong></td>
-                      <td style={{ fontWeight: 600 }}>{f.name}</td>
-                      <td>{f.designation || 'Faculty'}</td>
-                      <td style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                        {f.specialization || f.subjectsHandled || '—'}
-                      </td>
-                      <td style={{ textAlign: 'center' }}>{f.maxWeeklyLoad || 18} hrs</td>
-                      <td style={{ textAlign: 'center' }}>
-                        {f.hod ? <span className="badge badge-warning">HOD (Non-Teaching)</span> : <span className="badge badge-success">Teaching</span>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
-          <button type="button" className="btn btn-secondary" onClick={() => setShowFacultyListModal(false)}>
-            Close
-          </button>
-        </div>
       </Modal>
     </div>
   );

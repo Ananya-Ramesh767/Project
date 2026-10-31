@@ -366,6 +366,15 @@ public class FacultyAllocationService {
             return true;
         }
 
+        // Departmental co-curricular, skill development, testing, mentoring or counselling subjects
+        boolean isDepartmentalGeneral = subName.contains("aptitude") || subName.contains("technical test")
+                || subName.contains("career skill") || subName.contains("nptel") || subName.contains("leet")
+                || subName.contains("counsel") || subName.contains("mentor") || subName.contains("library")
+                || subName.contains("soft skill") || subName.contains("aiml") || subName.contains("faiml");
+        if (isDepartmentalGeneral && DepartmentMatcher.matches(f.getDepartment(), subject.getDepartment())) {
+            return true;
+        }
+
         // 3. Text-based match from subjectsHandled / specialization (from PDF upload)
         String spec = (f.getSpecialization() != null ? f.getSpecialization() : "").toLowerCase();
         String handled = (f.getSubjectsHandled() != null ? f.getSubjectsHandled() : "").toLowerCase();

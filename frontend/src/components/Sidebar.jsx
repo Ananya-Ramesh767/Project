@@ -47,7 +47,7 @@ export default function Sidebar({ user, onLogout }) {
             <NavItem to="/faculty"    icon={Users}>Faculty Master</NavItem>
             <NavItem to="/rooms"      icon={DoorOpen}>Room Master</NavItem>
             <NavItem to="/batches"    icon={Layers}>Batches &amp; Sections</NavItem>
-            <NavItem to="/offerings"  icon={BookMarked}>Subject Offerings</NavItem>
+            <NavItem to="/offerings" icon={BookMarked}>Subject Offerings</NavItem>
             <NavItem to="/calendar"   icon={Calendar}>Year Calendar</NavItem>
             <NavItem to="/timeslots"  icon={Clock}>Timeslots</NavItem>
 

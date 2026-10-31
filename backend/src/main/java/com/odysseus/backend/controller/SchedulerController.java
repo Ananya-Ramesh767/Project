@@ -80,13 +80,15 @@ public class SchedulerController {
         TimetableJob job = TimetableJob.builder()
                 .id(jobId)
                 .status("QUEUED")
+                .department(department)
+                .semester(semester)
                 .message("Timetable generation queued. Solver will start shortly.")
                 .createdAt(LocalDateTime.now())
                 .build();
         jobRepository.save(job);
 
         // 3. Start async solver
-        solverService.solveAsync(jobId);
+        solverService.solveAsync(jobId, department, semester);
 
         // 4. Return immediately
         return ResponseEntity.ok(Map.of(

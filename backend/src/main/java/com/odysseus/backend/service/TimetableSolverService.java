@@ -91,28 +91,51 @@ public class TimetableSolverService {
     // --- Public API ---
 
     @Async("solverExecutor")
-    public void solveAsync(String jobId) {
+    public void solveAsync(String jobId, String department, Integer semester) {
         try {
             updateJobStatus(jobId, "SOLVING", "Solver started. Constructing constraint graph and problem model...");
-            solve(jobId);
+            solve(jobId, department, semester);
         } catch (Exception e) {
             log.error("Solver encountered fatal error for job {}", jobId, e);
             updateJobStatus(jobId, "FAILED", "Solver error: " + e.getMessage());
         }
     }
 
+    @Async("solverExecutor")
+    public void solveAsync(String jobId) {
+        solveAsync(jobId, null, null);
+    }
+
     // --- Core solver ---
 
     @Transactional
     public void solve(String jobId) {
+        solve(jobId, null, null);
+    }
+
+    @Transactional
+    public void solve(String jobId, String department, Integer semester) {
         // 1. Load active data (strictly exclude HODs from assignable teaching faculty pool)
-        List<SubjectOffering> offerings = offeringRepository.findByActiveTrue();
+        List<Batch> allBatches = batchRepository.findByActiveTrue();
+        List<Batch> targetBatches = allBatches.stream()
+                .filter(b -> department == null || department.isBlank() || com.odysseus.backend.util.DepartmentMatcher.matches(b.getDepartment(), department))
+                .filter(b -> semester == null || semester.equals(b.getSemester()))
+                .collect(Collectors.toList());
+        if (targetBatches.isEmpty()) {
+            targetBatches = allBatches;
+        }
+        Set<Long> targetBatchIds = targetBatches.stream().map(Batch::getId).collect(Collectors.toSet());
+
+        List<SubjectOffering> allOfferings = offeringRepository.findByActiveTrue();
+        List<SubjectOffering> offerings = allOfferings.stream()
+                .filter(o -> o.getBatch() != null && targetBatchIds.contains(o.getBatch().getId()))
+                .collect(Collectors.toList());
+
         List<Faculty> allFaculty = facultyRepository.findByActiveTrue().stream()
                 .filter(f -> !f.isHod())
                 .collect(Collectors.toList());
         List<Room> allRooms = roomRepository.findByActiveTrue();
         List<CollegeTimeslot> allTimeslots = timeslotRepository.findByActiveTrue();
-        List<Batch> allBatches = batchRepository.findByActiveTrue();
 
         // 2. Build teaching slots (exclude breaks and lunch)
         List<Slot> teachingSlots = allTimeslots.stream()
@@ -127,8 +150,6 @@ public class TimetableSolverService {
                         LinkedHashMap::new, Collectors.toList()));
 
         // 3. Separate rooms
-        // Theory/lecture rooms: LECTURE_HALL, CLASSROOM, SEMINAR_HALL, CONFERENCE_HALL, OTHER
-        // Lab rooms: LAB, LABORATORY, COMPUTER_LAB, ELECTRONICS_LAB, etc. (any type containing 'LAB')
         List<Room> lectureRooms = allRooms.stream()
                 .filter(r -> isTheoryRoom(r.getRoomType()))
                 .collect(Collectors.toList());
@@ -136,14 +157,12 @@ public class TimetableSolverService {
                 .filter(r -> isLabRoom(r.getRoomType()))
                 .collect(Collectors.toList());
 
-        // 4. Load faculty unavailabilities into lookup map: (facultyId, day, period) -> unavailable
+        // 4. Load faculty unavailabilities in a SINGLE query
+        List<FacultyAvailability> allAvails = availabilityRepository.findAll();
         Set<String> facultyUnavailableSet = new HashSet<>();
-        for (Faculty f : allFaculty) {
-            List<FacultyAvailability> avList = availabilityRepository.findByFacultyId(f.getId());
-            for (FacultyAvailability av : avList) {
-                if (!av.isAvailable()) {
-                    facultyUnavailableSet.add(f.getId() + "@" + av.getDayOfWeek().toUpperCase() + "-P" + av.getPeriodNumber());
-                }
+        for (FacultyAvailability av : allAvails) {
+            if (!av.isAvailable() && av.getFaculty() != null && av.getDayOfWeek() != null) {
+                facultyUnavailableSet.add(av.getFaculty().getId() + "@" + av.getDayOfWeek().toUpperCase() + "-P" + av.getPeriodNumber());
             }
         }
 
@@ -176,7 +195,6 @@ public class TimetableSolverService {
                         .min(Comparator.comparingInt((Faculty f) -> {
                             int cur = facultyDemandLoadMap.getOrDefault(f.getId(), 0);
                             int max = f.getMaxWeeklyLoad() != null && f.getMaxWeeklyLoad() > 0 ? f.getMaxWeeklyLoad() : 18;
-                            // Penalize heavily if this assignment would exceed max weekly load
                             int penalty = (cur + neededHours > max) ? 1000 : 0;
                             return cur + penalty;
                         }))
@@ -194,27 +212,21 @@ public class TimetableSolverService {
                 continue;
             }
 
-
             int theoryPeriods = subject.getWeeklyLecturePeriods() != null ? subject.getWeeklyLecturePeriods() : 0;
             int labPeriods = subject.getWeeklyPracticalPeriods() != null ? subject.getWeeklyPracticalPeriods() : 0;
             int tutorialPeriods = subject.getWeeklyTutorialPeriods() != null ? subject.getWeeklyTutorialPeriods() : 0;
 
-            // CRITICAL FIX: If the subject's type is LAB/THEORY_AND_LAB, ensure lab periods are
-            // derived correctly. A subject typed LAB must NEVER be scheduled as THEORY in a lecture hall.
             boolean isLabSubject = "LAB".equalsIgnoreCase(subject.getSubjectType());
             boolean isTheoryAndLab = "THEORY_AND_LAB".equalsIgnoreCase(subject.getSubjectType());
 
             if (isLabSubject) {
-                // This is a pure lab subject. All its periods must be LAB-type in LAB rooms.
-                // If weeklyPracticalPeriods is not set, derive from calculatedWeeklyHours or use theoryPeriods.
                 if (labPeriods == 0) {
                     labPeriods = theoryPeriods > 0 ? theoryPeriods : (int) Math.ceil(subject.getCalculatedWeeklyHours());
-                    if (labPeriods == 0) labPeriods = 2; // minimum 2 periods for a lab
+                    if (labPeriods == 0) labPeriods = 2;
                 }
-                theoryPeriods = 0; // Pure lab — no theory sessions
+                theoryPeriods = 0;
                 tutorialPeriods = 0;
 
-                // PRE-SOLVE: validate that at least one lab room exists for this subject
                 if (labRooms.isEmpty()) {
                     infeasibleReasons.add("Subject [" + subject.getSubjectCode() + " - " + subject.getSubjectName()
                             + "] is a LAB subject for section [" + batch.getBatchName()
@@ -222,7 +234,6 @@ public class TimetableSolverService {
                             + "Add rooms of type LAB before generating.");
                     continue;
                 }
-                // Validate capacity
                 boolean hasCapableLabRoom = labRooms.stream()
                         .anyMatch(r -> r.getCapacity() == null || r.getCapacity() >= batch.getStrength());
                 if (!hasCapableLabRoom) {
@@ -232,13 +243,11 @@ public class TimetableSolverService {
                     continue;
                 }
             } else if (isTheoryAndLab) {
-                // Has both theory and lab sessions. Derive lab periods from practical periods.
                 if (theoryPeriods == 0 && labPeriods == 0) {
                     theoryPeriods = (int) Math.ceil(subject.getCalculatedWeeklyHours());
                     if (theoryPeriods == 0) theoryPeriods = 1;
                 }
             } else {
-                // Pure THEORY/TUTORIAL subject
                 if (theoryPeriods == 0 && labPeriods == 0 && tutorialPeriods == 0) {
                     theoryPeriods = (int) Math.ceil(subject.getCalculatedWeeklyHours());
                     if (theoryPeriods == 0) theoryPeriods = 1;
@@ -276,15 +285,29 @@ public class TimetableSolverService {
         Map<SlotKey, Set<Long>> facultySlotMap = new HashMap<>();
         Map<SlotKey, Set<Long>> roomSlotMap = new HashMap<>();
         Map<Long, Integer> facultyLoadMap = new HashMap<>();
+        Map<String, Integer> facultyDailyLoadMap = new HashMap<>();
+
+        // Pre-populate with existing active assignments from other batches (Cross-Semester Conflict Prevention)
+        List<TimetableAssignment> existingAssignments = assignmentRepository.findByActiveTrue();
+        for (TimetableAssignment ea : existingAssignments) {
+            if (ea.getBatch() != null && !targetBatchIds.contains(ea.getBatch().getId())) {
+                int duration = ea.getDurationPeriods() != null ? ea.getDurationPeriods() : 1;
+                for (int p = 0; p < duration; p++) {
+                    SlotKey key = new SlotKey(ea.getDayOfWeek(), ea.getPeriodNumber() + p);
+                    if (ea.getFaculty() != null) {
+                        facultySlotMap.computeIfAbsent(key, k -> new HashSet<>()).add(ea.getFaculty().getId());
+                        facultyLoadMap.merge(ea.getFaculty().getId(), 1, Integer::sum);
+                        facultyDailyLoadMap.merge(ea.getFaculty().getId() + "@" + ea.getDayOfWeek().toUpperCase(), 1, Integer::sum);
+                    }
+                    if (ea.getRoom() != null) {
+                        roomSlotMap.computeIfAbsent(key, k -> new HashSet<>()).add(ea.getRoom().getId());
+                    }
+                }
+            }
+        }
 
         List<TimetableEntry> entries = new ArrayList<>();
         List<TimetableAssignment> assignments = new ArrayList<>();
-
-        // If pre-solve validation found infeasibilities (e.g., no lab rooms), fail early
-        if (!infeasibleReasons.isEmpty()) {
-            updateJobStatus(jobId, "INFEASIBLE", "Pre-solve validation failed: " + String.join(" | ", infeasibleReasons));
-            return;
-        }
 
         // 7. Sort demands: Lab sessions first (most constrained), then by periods needed desc
         demands.sort(Comparator.comparingInt((Demand d) -> "LAB".equals(d.sessionType) ? 0 : 1)
@@ -298,10 +321,9 @@ public class TimetableSolverService {
                 .thenComparing(r -> r.getRoomCode() != null ? r.getRoomCode() : ""));
 
         Set<Long> assignedHomeRoomIds = new HashSet<>();
-        for (Batch batch : allBatches) {
+        for (Batch batch : targetBatches) {
             Room home = null;
 
-            // 1. If batch already has an assignedRoomCode, use that room
             if (batch.getAssignedRoomCode() != null && !batch.getAssignedRoomCode().trim().isEmpty()) {
                 home = sortedLectureRooms.stream()
                         .filter(r -> r.getRoomCode().equalsIgnoreCase(batch.getAssignedRoomCode().trim()))
@@ -309,7 +331,6 @@ public class TimetableSolverService {
                         .orElse(null);
             }
 
-            // 2. If room has assignedSection matching batch section or name
             if (home == null) {
                 home = sortedLectureRooms.stream()
                         .filter(r -> !assignedHomeRoomIds.contains(r.getId()))
@@ -321,9 +342,8 @@ public class TimetableSolverService {
                         .orElse(null);
             }
 
-            // 3. Fallback: Department-wise floor allocation from RoomAllocationService
             if (home == null) {
-                List<Batch> unassigned = allBatches.stream()
+                List<Batch> unassigned = targetBatches.stream()
                         .filter(b -> !batchHomeRoomMap.containsKey(b.getId()))
                         .collect(Collectors.toList());
                 List<Room> availableRooms = sortedLectureRooms.stream()
@@ -345,20 +365,7 @@ public class TimetableSolverService {
             if (home != null) {
                 batchHomeRoomMap.put(batch.getId(), home);
                 assignedHomeRoomIds.add(home.getId());
-
-                // Persist the room back to the batch
-                batch.setAssignedBlockName(home.getBlockName());
-                batch.setAssignedFloorNumber(home.getFloorNumber());
-                batch.setAssignedRoomCode(home.getRoomCode());
-                batchRepository.save(batch);
-
-                // Link section back to room if not set
-                if (home.getAssignedSection() == null || home.getAssignedSection().trim().isEmpty()) {
-                    home.setAssignedSection(batch.getBatchName());
-                    roomRepository.save(home);
-                }
-
-                log.info("Batch [{}] allocated dedicated room [{}] on Floor {} of [{}]",
+                log.info("Batch [{}] candidate dedicated room [{}] on Floor {} of [{}]",
                         batch.getBatchName(), home.getRoomCode(), home.getFloorNumber(), home.getBlockName());
             }
         }
@@ -368,13 +375,13 @@ public class TimetableSolverService {
 
         for (Demand demand : demands) {
             boolean placed;
+            Room homeRoom = batchHomeRoomMap.get(demand.batch.getId());
             if ("LAB".equals(demand.sessionType)) {
                 placed = placeLabDemand(demand, slotsByDay, labRooms, entries, assignments,
-                        batchSlotMap, facultySlotMap, roomSlotMap, facultyLoadMap, facultyUnavailableSet);
+                        batchSlotMap, facultySlotMap, roomSlotMap, facultyLoadMap, facultyDailyLoadMap, facultyUnavailableSet, homeRoom);
             } else {
-                Room preferredRoom = batchHomeRoomMap.get(demand.batch.getId());
                 placed = placeRegularDemand(demand, teachingSlots, lectureRooms, entries, assignments,
-                        batchSlotMap, facultySlotMap, roomSlotMap, facultyLoadMap, facultyUnavailableSet, preferredRoom);
+                        batchSlotMap, facultySlotMap, roomSlotMap, facultyLoadMap, facultyDailyLoadMap, facultyUnavailableSet, homeRoom);
             }
 
             if (!placed) {
@@ -388,8 +395,8 @@ public class TimetableSolverService {
             }
         }
 
-        // 8. Academic hours check per batch (verify required academic hours satisfied)
-        for (Batch b : allBatches) {
+        // 8. Academic hours check per batch
+        for (Batch b : targetBatches) {
             int required = requiredAcademicHoursPerBatch.getOrDefault(b.getId(), 0);
             int scheduled = scheduledAcademicHoursPerBatch.getOrDefault(b.getId(), 0);
             if (required > 0 && scheduled < required) {
@@ -398,15 +405,14 @@ public class TimetableSolverService {
             }
         }
 
-        // If any academic demand failed, fail with INFEASIBLE (never report false success!)
         if (!infeasibleReasons.isEmpty()) {
             updateJobStatus(jobId, "INFEASIBLE", "Scheduling Infeasible: " + String.join(" | ", infeasibleReasons));
             return;
         }
 
         // 9. Schedule Special Activities (Career Skill Dev 2hrs, Aptitude, LeetCode, Counselling, etc.)
-        scheduleSpecialActivities(allBatches, teachingSlots, lectureRooms, allFaculty,
-                entries, assignments, batchSlotMap, facultySlotMap, roomSlotMap, facultyLoadMap, facultyUnavailableSet, batchHomeRoomMap);
+        scheduleSpecialActivities(targetBatches, teachingSlots, lectureRooms, allFaculty,
+                entries, assignments, batchSlotMap, facultySlotMap, roomSlotMap, facultyLoadMap, facultyDailyLoadMap, facultyUnavailableSet, batchHomeRoomMap);
 
         // 10. Run complete independent validation via TimetableValidationService
         TimetableValidationResult validation = validationService.validateEntireSchedule(assignments);
@@ -416,22 +422,37 @@ public class TimetableSolverService {
             return;
         }
 
-        // 11. Dual persistence: Save TimetableEntry (legacy snapshot) & TimetableAssignment (relational)
+        // 11. Dual persistence: Save TimetableEntry & TimetableAssignment
         for (TimetableEntry entry : entries) {
             entry.setJobId(jobId);
         }
         entryRepository.saveAll(entries);
 
-        // Update active flags on previous assignments and save new
-        for (Batch b : allBatches) {
+        // Update active assignments: delete only for targetBatches and save new
+        for (Batch b : targetBatches) {
             assignmentRepository.deleteByBatchId(b.getId());
         }
         assignmentRepository.saveAll(assignments);
 
+        // 11b. Persist dedicated classroom allocations for batches now that timetable has been saved
+        for (Map.Entry<Long, Room> bEntry : batchHomeRoomMap.entrySet()) {
+            batchRepository.findById(bEntry.getKey()).ifPresent(b -> {
+                Room home = bEntry.getValue();
+                b.setAssignedBlockName(home.getBlockName());
+                b.setAssignedFloorNumber(home.getFloorNumber());
+                b.setAssignedRoomCode(home.getRoomCode());
+                batchRepository.save(b);
+                home.setAssignedSection(b.getBatchName());
+                roomRepository.save(home);
+                log.info("Batch [{}] dedicated room [{}] officially persisted on timetable completion.",
+                        b.getBatchName(), home.getRoomCode());
+            });
+        }
+
         // 12. Finalize Job Status
         TimetableJob job = jobRepository.findById(jobId).orElseThrow();
         job.setStatus("COMPLETED");
-        job.setMessage("Timetable successfully generated with " + entries.size() + " periods scheduled across " + allBatches.size() + " sections.");
+        job.setMessage("Timetable successfully generated with " + entries.size() + " periods scheduled across " + targetBatches.size() + " sections.");
         job.setTotalEntries(entries.size());
         job.setCompletedAt(LocalDateTime.now());
         jobRepository.save(job);
@@ -448,6 +469,7 @@ public class TimetableSolverService {
                                        Map<SlotKey, Set<Long>> facultySlotMap,
                                        Map<SlotKey, Set<Long>> roomSlotMap,
                                        Map<Long, Integer> facultyLoadMap,
+                                       Map<String, Integer> facultyDailyLoadMap,
                                        Set<String> facultyUnavailableSet,
                                        Room preferredRoom) {
         int placed = 0;
@@ -462,7 +484,7 @@ public class TimetableSolverService {
             if (room == null) continue;
 
             if (!isSlotAvailable(slot, demand.batch.getId(), demand.faculty.getId(),
-                    batchSlotMap, facultySlotMap, facultyLoadMap, demand.faculty.getMaxWeeklyLoad(),
+                    batchSlotMap, facultySlotMap, facultyLoadMap, facultyDailyLoadMap, demand.faculty.getMaxWeeklyLoad(),
                     facultyUnavailableSet)) {
                 continue;
             }
@@ -471,7 +493,7 @@ public class TimetableSolverService {
             entries.add(buildEntry(demand, slot, room));
             assignments.add(buildAssignment(demand, slot, room, 1, false));
             markSlotUsed(slot, demand.batch.getId(), demand.faculty.getId(), room.getId(),
-                    batchSlotMap, facultySlotMap, roomSlotMap, facultyLoadMap, true);
+                    batchSlotMap, facultySlotMap, roomSlotMap, facultyLoadMap, facultyDailyLoadMap, true);
             usedDays.add(slot.dayOfWeek);
             placed++;
         }
@@ -488,7 +510,7 @@ public class TimetableSolverService {
                 if (room == null) continue;
 
                 if (!isSlotAvailable(slot, demand.batch.getId(), demand.faculty.getId(),
-                        batchSlotMap, facultySlotMap, facultyLoadMap, demand.faculty.getMaxWeeklyLoad(),
+                        batchSlotMap, facultySlotMap, facultyLoadMap, facultyDailyLoadMap, demand.faculty.getMaxWeeklyLoad(),
                         facultyUnavailableSet)) {
                     continue;
                 }
@@ -496,7 +518,7 @@ public class TimetableSolverService {
                 entries.add(buildEntry(demand, slot, room));
                 assignments.add(buildAssignment(demand, slot, room, 1, false));
                 markSlotUsed(slot, demand.batch.getId(), demand.faculty.getId(), room.getId(),
-                        batchSlotMap, facultySlotMap, roomSlotMap, facultyLoadMap, true);
+                        batchSlotMap, facultySlotMap, roomSlotMap, facultyLoadMap, facultyDailyLoadMap, true);
                 placed++;
             }
         }
@@ -512,7 +534,9 @@ public class TimetableSolverService {
                                    Map<SlotKey, Set<Long>> facultySlotMap,
                                    Map<SlotKey, Set<Long>> roomSlotMap,
                                    Map<Long, Integer> facultyLoadMap,
-                                   Set<String> facultyUnavailableSet) {
+                                   Map<String, Integer> facultyDailyLoadMap,
+                                   Set<String> facultyUnavailableSet,
+                                   Room homeRoom) {
 
         int labDuration = demand.subject.getLabDuration() != null ? demand.subject.getLabDuration() : 2;
         int totalLabPeriods = demand.periodsNeeded;
@@ -550,7 +574,7 @@ public class TimetableSolverService {
 
                     boolean allAvailable = blockSlots.stream().allMatch(slot ->
                             isSlotAvailable(slot, demand.batch.getId(), demand.faculty.getId(),
-                                    batchSlotMap, facultySlotMap, facultyLoadMap,
+                                    batchSlotMap, facultySlotMap, facultyLoadMap, facultyDailyLoadMap,
                                     demand.faculty.getMaxWeeklyLoad(), facultyUnavailableSet));
 
                     if (!allAvailable) continue;
@@ -566,13 +590,24 @@ public class TimetableSolverService {
                         if (roomFree) { labRoom = room; break; }
                     }
 
+                    // Fallback to usual section classroom if lab room is unavailable
+                    if (labRoom == null && homeRoom != null) {
+                        boolean homeFree = blockSlots.stream().allMatch(slot -> {
+                            SlotKey key = new SlotKey(slot.dayOfWeek, slot.periodNumber);
+                            return !roomSlotMap.getOrDefault(key, Set.of()).contains(homeRoom.getId());
+                        });
+                        if (homeFree && (homeRoom.getCapacity() == null || homeRoom.getCapacity() >= demand.batch.getStrength())) {
+                            labRoom = homeRoom;
+                        }
+                    }
+
                     if (labRoom == null) continue;
 
                     // Place the entire lab block
                     for (Slot slot : blockSlots) {
                         entries.add(buildEntry(demand, slot, labRoom));
                         markSlotUsed(slot, demand.batch.getId(), demand.faculty.getId(),
-                                labRoom.getId(), batchSlotMap, facultySlotMap, roomSlotMap, facultyLoadMap, true);
+                                labRoom.getId(), batchSlotMap, facultySlotMap, roomSlotMap, facultyLoadMap, facultyDailyLoadMap, true);
                     }
 
                     // Create composite TimetableAssignment for the lab block
@@ -595,17 +630,11 @@ public class TimetableSolverService {
                                            Map<SlotKey, Set<Long>> facultySlotMap,
                                            Map<SlotKey, Set<Long>> roomSlotMap,
                                            Map<Long, Integer> facultyLoadMap,
+                                           Map<String, Integer> facultyDailyLoadMap,
                                            Set<String> facultyUnavailableSet,
                                            Map<Long, Room> batchHomeRoomMap) {
 
-        String[] specialActivities = {
-                "CAREER_SKILL_DEVELOPMENT", "CAREER_SKILL_DEVELOPMENT", // 2 hours
-                "LEETCODE",
-                "APTITUDE",
-                "TECHNICAL_TEST",
-                "COUNSELLING",
-                "NPTEL"
-        };
+        Map<String, Subject> specialSubjectCache = new HashMap<>();
 
         for (Batch batch : batches) {
             Room homeRoom = batchHomeRoomMap != null ? batchHomeRoomMap.get(batch.getId()) : null;
@@ -686,26 +715,38 @@ public class TimetableSolverService {
                 for (Faculty candidate : candidatePool) {
                     String unavKey = candidate.getId() + "@" + slot.dayOfWeek.toUpperCase() + "-P" + slot.periodNumber;
                     if (!facultyUnavailableSet.contains(unavKey) && !facultySlotMap.getOrDefault(key, Set.of()).contains(candidate.getId())) {
-                        fac = candidate;
-                        break;
+                        int dailyLoad = facultyDailyLoadMap.getOrDefault(candidate.getId() + "@" + slot.dayOfWeek.toUpperCase(), 0);
+                        if (dailyLoad < 6) {
+                            fac = candidate;
+                            break;
+                        }
                     }
                 }
                 if (fac == null) {
-                    fac = candidatePool.stream()
-                            .filter(c -> !facultyUnavailableSet.contains(c.getId() + "@" + slot.dayOfWeek.toUpperCase() + "-P" + slot.periodNumber))
-                            .findFirst().orElse(null);
+                    for (Faculty candidate : facultyList) {
+                        String unavKey = candidate.getId() + "@" + slot.dayOfWeek.toUpperCase() + "-P" + slot.periodNumber;
+                        if (!facultyUnavailableSet.contains(unavKey) && !facultySlotMap.getOrDefault(key, Set.of()).contains(candidate.getId())) {
+                            int dailyLoad = facultyDailyLoadMap.getOrDefault(candidate.getId() + "@" + slot.dayOfWeek.toUpperCase(), 0);
+                            if (dailyLoad < 6) {
+                                fac = candidate;
+                                break;
+                            }
+                        }
+                    }
                 }
 
                 final String currentAct = activity;
-                Subject specSub = subjectRepository.findBySubjectCode(currentAct)
-                        .orElseGet(() -> subjectRepository.save(Subject.builder()
-                                .subjectCode(currentAct)
-                                .subjectName(formatActivityTitle(currentAct))
-                                .department("General")
-                                .subjectType("SPECIAL")
-                                .requiresLab(false)
-                                .active(true)
-                                .build()));
+                Subject specSub = specialSubjectCache.computeIfAbsent(currentAct, code ->
+                        subjectRepository.findBySubjectCode(code)
+                                .orElseGet(() -> subjectRepository.save(Subject.builder()
+                                        .subjectCode(code)
+                                        .subjectName(formatActivityTitle(code))
+                                        .department("General")
+                                        .subjectType("SPECIAL")
+                                        .requiresLab(false)
+                                        .active(true)
+                                        .build()))
+                );
 
                 Demand specDemand = new Demand(null, batch, specSub, fac, "SPECIAL", currentAct, 1);
                 entries.add(buildEntry(specDemand, slot, room));
@@ -713,7 +754,10 @@ public class TimetableSolverService {
                 if (room != null && fac != null) {
                     assignments.add(buildAssignment(specDemand, slot, room, 1, false));
                     markSlotUsed(slot, batch.getId(), fac.getId(), room.getId(),
-                            batchSlotMap, facultySlotMap, roomSlotMap, facultyLoadMap, false);
+                            batchSlotMap, facultySlotMap, roomSlotMap, facultyLoadMap, facultyDailyLoadMap, false);
+                } else if (room != null) {
+                    markSlotUsed(slot, batch.getId(), null, room.getId(),
+                            batchSlotMap, facultySlotMap, roomSlotMap, facultyLoadMap, facultyDailyLoadMap, false);
                 }
             }
         }
@@ -737,6 +781,7 @@ public class TimetableSolverService {
                                     Map<SlotKey, Set<Long>> batchSlotMap,
                                     Map<SlotKey, Set<Long>> facultySlotMap,
                                     Map<Long, Integer> facultyLoadMap,
+                                    Map<String, Integer> facultyDailyLoadMap,
                                     Integer maxWeeklyLoad,
                                     Set<String> facultyUnavailableSet) {
         SlotKey key = new SlotKey(slot.dayOfWeek, slot.periodNumber);
@@ -751,9 +796,13 @@ public class TimetableSolverService {
         String unavKey = facultyId + "@" + slot.dayOfWeek.toUpperCase() + "-P" + slot.periodNumber;
         if (facultyUnavailableSet.contains(unavKey)) return false;
 
-        // Faculty workload limit
+        // Faculty weekly workload limit
         int currentLoad = facultyLoadMap.getOrDefault(facultyId, 0);
         if (maxWeeklyLoad != null && currentLoad >= maxWeeklyLoad) return false;
+
+        // Faculty daily workload limit: max 5 periods/day ensures 2-3 free periods per day
+        int currentDailyLoad = facultyDailyLoadMap.getOrDefault(facultyId + "@" + slot.dayOfWeek.toUpperCase(), 0);
+        if (currentDailyLoad >= 6) return false;
 
         return true;
     }
@@ -801,6 +850,7 @@ public class TimetableSolverService {
                               Map<SlotKey, Set<Long>> facultySlotMap,
                               Map<SlotKey, Set<Long>> roomSlotMap,
                               Map<Long, Integer> facultyLoadMap,
+                              Map<String, Integer> facultyDailyLoadMap,
                               boolean isAcademic) {
         SlotKey key = new SlotKey(slot.dayOfWeek, slot.periodNumber);
         if (batchId != null) batchSlotMap.computeIfAbsent(key, k -> new HashSet<>()).add(batchId);
@@ -808,6 +858,7 @@ public class TimetableSolverService {
             facultySlotMap.computeIfAbsent(key, k -> new HashSet<>()).add(facultyId);
             if (isAcademic) {
                 facultyLoadMap.merge(facultyId, 1, Integer::sum);
+                facultyDailyLoadMap.merge(facultyId + "@" + slot.dayOfWeek.toUpperCase(), 1, Integer::sum);
             }
         }
         if (roomId != null) roomSlotMap.computeIfAbsent(key, k -> new HashSet<>()).add(roomId);

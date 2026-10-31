@@ -495,61 +495,18 @@ export default function RoomManagementPage({ user }) {
                 <thead>
                   <tr>
                     <th>Room Code</th>
-                    <th>Building & Floor Hierarchy</th>
+                    <th>Room Name</th>
                     <th>Room Type</th>
                     <th>Capacity</th>
-                    <th>Department</th>
                     <th>Assigned Default Section</th>
                     <th>Status</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredRooms.map(r => (
-                    <tr key={r.id}>
-                      <td><strong>{r.roomCode}</strong></td>
-                      <td>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
-                          <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
-                            {r.blockName || 'Main Block'} → {formatFloor(r.floorNumber ?? 1)} → {r.roomName}
-                          </span>
-                          {r.blockName === 'Block 3' && (
-                            <span style={{ fontSize: '0.72rem', color: '#38bdf8', fontWeight: 600 }}>
-                              📍 Explicit Institutional Campus Lab Location
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td>
-                        <span className={`badge ${r.roomType === 'LAB' ? 'badge-warning' : r.roomType === 'SEMINAR_HALL' ? 'badge-primary' : 'badge-success'}`}>
-                          {r.roomType === 'LAB' ? 'LABORATORY' : r.roomType === 'SEMINAR_HALL' ? 'MBA / GALLERY' : 'CLASSROOM'}
-                        </span>
-                      </td>
-                      <td><strong>{r.capacity} seats</strong></td>
-                      <td style={{ maxWidth: '180px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.department}>
-                        {r.department}
-                      </td>
-                      <td>
-                        {r.assignedSection ? (
-                          <span className="badge badge-primary">
-                            {r.assignedSection} {r.yearOfStudy ? `(Yr ${r.yearOfStudy})` : ''}
-                          </span>
-                        ) : (
-                          <span className="badge badge-secondary" style={{ opacity: 0.6 }}>Unassigned</span>
-                        )}
-                      </td>
-                      <td><span className={`badge ${r.active ? 'badge-success' : 'badge-danger'}`}>{r.active ? 'Active' : 'Inactive'}</span></td>
-                      <td>
-                        <div style={{ display: 'flex', gap: '0.5rem' }}>
-                          <button className="btn btn-secondary" style={{ padding: '0.4rem 0.6rem' }} onClick={() => handleEdit(r)}><Edit2 size={14} /></button>
-                          <button className="btn btn-danger" style={{ padding: '0.4rem 0.6rem' }} onClick={() => handleDelete(r.id)}><Trash2 size={14} /></button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {filteredRooms.length === 0 && (
+                  {filteredRooms.length === 0 ? (
                     <tr>
-                      <td colSpan="9" style={{ textAlign: 'center', padding: '3.5rem 1rem' }}>
+                      <td colSpan="7" style={{ textAlign: 'center', padding: '3.5rem 1rem' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
                           <Building size={44} style={{ color: 'var(--text-muted)', opacity: 0.5 }} />
                           <h4 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0 }}>No rooms configured.</h4>
@@ -566,6 +523,95 @@ export default function RoomManagementPage({ user }) {
                         </div>
                       </td>
                     </tr>
+                  ) : (
+                    (() => {
+                      // Group rooms by Building then Floor for hierarchical display
+                      const grouped = {};
+                      filteredRooms.forEach(r => {
+                        const block = r.blockName || 'Main Block';
+                        const floor = r.floorNumber ?? 0;
+                        if (!grouped[block]) grouped[block] = {};
+                        if (!grouped[block][floor]) grouped[block][floor] = [];
+                        grouped[block][floor].push(r);
+                      });
+
+                      const rows = [];
+                      Object.entries(grouped).forEach(([blockName, floors]) => {
+                        // Building header row
+                        rows.push(
+                          <tr key={`block-${blockName}`}>
+                            <td colSpan="7" style={{
+                              background: 'rgba(99, 102, 241, 0.12)',
+                              padding: '0.6rem 1rem',
+                              fontWeight: 800,
+                              fontSize: '0.88rem',
+                              color: '#818cf8',
+                              borderLeft: '3px solid #6366f1',
+                              letterSpacing: '0.02em'
+                            }}>
+                              <Building size={15} style={{ marginRight: '0.5rem', verticalAlign: 'middle' }} />
+                              {blockName}
+                            </td>
+                          </tr>
+                        );
+
+                        const sortedFloors = Object.keys(floors).sort((a, b) => Number(a) - Number(b));
+                        sortedFloors.forEach(floorNum => {
+                          // Floor subheader row
+                          rows.push(
+                            <tr key={`floor-${blockName}-${floorNum}`}>
+                              <td colSpan="7" style={{
+                                background: 'rgba(255,255,255,0.03)',
+                                padding: '0.45rem 1rem 0.45rem 2rem',
+                                fontWeight: 700,
+                                fontSize: '0.8rem',
+                                color: 'var(--text-muted)',
+                                borderLeft: '3px solid rgba(99, 102, 241, 0.3)'
+                              }}>
+                                {formatFloor(floorNum)}
+                              </td>
+                            </tr>
+                          );
+
+                          // Room rows
+                          floors[floorNum].forEach(r => {
+                            const cleanName = r.roomName && r.roomName.includes(' - ')
+                              ? r.roomName.split(' - ').pop().trim()
+                              : (r.roomName || r.roomCode);
+                            rows.push(
+                              <tr key={r.id}>
+                                <td><strong>{r.roomCode}</strong></td>
+                                <td style={{ fontWeight: 600, color: 'var(--text-main)' }}>{cleanName}</td>
+                                <td>
+                                  <span className={`badge ${r.roomType === 'LAB' ? 'badge-warning' : r.roomType === 'SEMINAR_HALL' ? 'badge-primary' : 'badge-success'}`}>
+                                    {r.roomType === 'LAB' ? 'LABORATORY' : r.roomType === 'SEMINAR_HALL' ? 'MBA / GALLERY' : 'CLASSROOM'}
+                                  </span>
+                                </td>
+                                <td><strong>{r.capacity} seats</strong></td>
+                                <td>
+                                  {r.assignedSection ? (
+                                    <span className="badge badge-primary">
+                                      {r.assignedSection} {r.yearOfStudy ? `(Yr ${r.yearOfStudy})` : ''}
+                                    </span>
+                                  ) : (
+                                    <span className="badge badge-secondary" style={{ opacity: 0.6 }}>Unassigned</span>
+                                  )}
+                                </td>
+                                <td><span className={`badge ${r.active ? 'badge-success' : 'badge-danger'}`}>{r.active ? 'Active' : 'Inactive'}</span></td>
+                                <td>
+                                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                    <button className="btn btn-secondary" style={{ padding: '0.4rem 0.6rem' }} onClick={() => handleEdit(r)}><Edit2 size={14} /></button>
+                                    <button className="btn btn-danger" style={{ padding: '0.4rem 0.6rem' }} onClick={() => handleDelete(r.id)}><Trash2 size={14} /></button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          });
+                        });
+                      });
+
+                      return rows;
+                    })()
                   )}
                 </tbody>
               </table>

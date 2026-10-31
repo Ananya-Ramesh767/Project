@@ -197,7 +197,7 @@ public class TimetableValidationService {
             }
 
             // Room capacity
-            if (a.getRoom().getCapacity() != null && a.getBatch().getStrength() != null 
+            if (a.getRoom() != null && a.getRoom().getCapacity() != null && a.getBatch() != null && a.getBatch().getStrength() != null 
                     && a.getRoom().getCapacity() < a.getBatch().getStrength()) {
                 errors.add(String.format("Room [%s] capacity (%d) insufficient for section [%s] (%d).",
                         a.getRoom().getRoomCode(), a.getRoom().getCapacity(), a.getBatch().getBatchName(), a.getBatch().getStrength()));
@@ -205,7 +205,7 @@ public class TimetableValidationService {
 
             // Room type: Lab sessions must use LAB rooms
             boolean isLabSession = a.isLabBlock() || "LAB".equalsIgnoreCase(a.getActivityType()) || (a.getSubject() != null && "LAB".equalsIgnoreCase(a.getSubject().getSubjectType()));
-            if (isLabSession && !isLabRoom(a.getRoom().getRoomType())) {
+            if (isLabSession && a.getRoom() != null && !isLabRoom(a.getRoom().getRoomType())) {
                 errors.add(String.format("Lab session for [%s] requires LAB room, but room [%s] is %s.",
                         a.getSubject().getSubjectCode(), a.getRoom().getRoomCode(), a.getRoom().getRoomType()));
             }
@@ -214,25 +214,31 @@ public class TimetableValidationService {
             for (int p = start; p <= end; p++) {
                 String slotKey = a.getDayOfWeek() + "-P" + p;
 
-                String secKey = a.getBatch().getId() + "@" + slotKey;
-                if (sectionSlotMap.containsKey(secKey)) {
-                    errors.add(String.format("Section [%s] conflict on %s at P%d.", a.getBatch().getBatchName(), a.getDayOfWeek(), p));
-                } else {
-                    sectionSlotMap.put(secKey, a);
+                if (a.getBatch() != null) {
+                    String secKey = a.getBatch().getId() + "@" + slotKey;
+                    if (sectionSlotMap.containsKey(secKey)) {
+                        errors.add(String.format("Section [%s] conflict on %s at P%d.", a.getBatch().getBatchName(), a.getDayOfWeek(), p));
+                    } else {
+                        sectionSlotMap.put(secKey, a);
+                    }
                 }
 
-                String facKey = a.getFaculty().getId() + "@" + slotKey;
-                if (facultySlotMap.containsKey(facKey)) {
-                    errors.add(String.format("Faculty [%s] conflict on %s at P%d.", a.getFaculty().getName(), a.getDayOfWeek(), p));
-                } else {
-                    facultySlotMap.put(facKey, a);
+                if (a.getFaculty() != null) {
+                    String facKey = a.getFaculty().getId() + "@" + slotKey;
+                    if (facultySlotMap.containsKey(facKey)) {
+                        errors.add(String.format("Faculty [%s] conflict on %s at P%d.", a.getFaculty().getName(), a.getDayOfWeek(), p));
+                    } else {
+                        facultySlotMap.put(facKey, a);
+                    }
                 }
 
-                String rmKey = a.getRoom().getId() + "@" + slotKey;
-                if (roomSlotMap.containsKey(rmKey)) {
-                    errors.add(String.format("Room [%s] conflict on %s at P%d.", a.getRoom().getRoomCode(), a.getDayOfWeek(), p));
-                } else {
-                    roomSlotMap.put(rmKey, a);
+                if (a.getRoom() != null) {
+                    String rmKey = a.getRoom().getId() + "@" + slotKey;
+                    if (roomSlotMap.containsKey(rmKey)) {
+                        errors.add(String.format("Room [%s] conflict on %s at P%d.", a.getRoom().getRoomCode(), a.getDayOfWeek(), p));
+                    } else {
+                        roomSlotMap.put(rmKey, a);
+                    }
                 }
             }
 

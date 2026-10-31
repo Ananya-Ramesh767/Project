@@ -26,6 +26,8 @@ public class Subject {
     private String department;
 
     private String facultyDepartment;
+    private String departmentClassificationSource;
+    private String departmentClassificationReference;
 
     private Integer semester;
 

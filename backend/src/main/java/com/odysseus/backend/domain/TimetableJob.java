@@ -22,6 +22,9 @@ public class TimetableJob {
     @Column(length = 2000)
     private String message;
 
+    private String department;
+    private Integer semester;
+
     private LocalDateTime createdAt;
     private LocalDateTime completedAt;
 

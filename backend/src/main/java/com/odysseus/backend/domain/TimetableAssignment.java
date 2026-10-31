@@ -24,8 +24,8 @@ public class TimetableAssignment {
     @JoinColumn(name = "subject_id")
     private Subject subject;
 
-    @ManyToOne(optional = false)
-    @JoinColumn(name = "faculty_id", nullable = false)
+    @ManyToOne
+    @JoinColumn(name = "faculty_id", nullable = true)
     private Faculty faculty;
 
     @ManyToOne(optional = false)

@@ -181,6 +181,8 @@ public class SubjectController {
                 exist.setSubjectName(sub.getSubjectName());
                 exist.setDepartment(sub.getDepartment());
                 exist.setFacultyDepartment(sub.getFacultyDepartment());
+                exist.setDepartmentClassificationSource(sub.getDepartmentClassificationSource());
+                exist.setDepartmentClassificationReference(sub.getDepartmentClassificationReference());
                 exist.setSemester(sub.getSemester());
                 exist.setSubjectType(sub.getSubjectType());
                 exist.setTheoryCredits(sub.getTheoryCredits());

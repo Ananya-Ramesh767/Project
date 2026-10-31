@@ -255,7 +255,7 @@ export default function BatchManagementPage({ user }) {
                           <strong>{b.assignedRoomCode}</strong> &bull; {b.assignedBlockName || 'Block'} (Flr {b.assignedFloorNumber ?? 1})
                         </span>
                       ) : (
-                        <span className="badge badge-secondary" style={{ opacity: 0.7, fontSize: '0.75rem' }}>Auto-Allocated on Solve</span>
+                        <span className="badge badge-secondary" style={{ opacity: 0.7, fontSize: '0.75rem' }}>Unassigned</span>
                       )}
                     </td>
                     <td>{b.academicYear}</td>

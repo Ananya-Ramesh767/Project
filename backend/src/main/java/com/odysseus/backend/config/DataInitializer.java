@@ -53,7 +53,6 @@ public class DataInitializer implements CommandLineRunner {
         seedCollegeTimeslots();
         seedGovernmentHolidays();
         seedDefaultAcademicCalendar();
-        seedEssentialSections();
     }
 
     private void seedEssentialSections() {
