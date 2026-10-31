@@ -25,6 +25,8 @@ public class FacultyController {
     private final BatchRepository batchRepository;
     private final com.odysseus.backend.service.PdfExtractionService pdfExtractionService;
     private final com.odysseus.backend.service.FacultyAllocationService allocationService;
+    private final com.odysseus.backend.service.DepartmentService departmentService;
+    private final com.odysseus.backend.service.CourseDepartmentMappingService courseMappingService;
 
     @GetMapping
     public ResponseEntity<List<Faculty>> getAllFaculty(
@@ -282,7 +284,28 @@ public class FacultyController {
     @GetMapping("/propose-assignment")
     public ResponseEntity<?> proposeAssignment(
             @RequestParam(required = false, defaultValue = "") String department,
-            @RequestParam(required = false) Integer semester) {
+            @RequestParam(required = false) String semester) {
+
+        // Determine semester filter
+        Integer targetSemester = null;
+        Boolean isOdd = null;
+        if (semester != null && !semester.trim().isEmpty()) {
+            String semClean = semester.trim();
+            if (semClean.equalsIgnoreCase("Odd") || semClean.equalsIgnoreCase("Odd Semester")) {
+                isOdd = true;
+            } else if (semClean.equalsIgnoreCase("Even") || semClean.equalsIgnoreCase("Even Semester")) {
+                isOdd = false;
+            } else {
+                String digits = semClean.replaceAll("[^0-9]", "");
+                if (!digits.isEmpty()) {
+                    try {
+                        targetSemester = Integer.parseInt(digits);
+                    } catch (NumberFormatException ignored) {}
+                }
+            }
+        }
+        final Integer finalTargetSemester = targetSemester;
+        final Boolean finalIsOdd = isOdd;
 
         // Treat "ALL" as wildcard (no department filtering)
         boolean allDept = department == null || department.isBlank() || department.equalsIgnoreCase("ALL");
@@ -292,7 +315,15 @@ public class FacultyController {
         List<Subject> subjects = subjectRepository.findAll().stream()
                 .filter(Subject::isActive)
                 .filter(s -> deptFilter.isEmpty() || com.odysseus.backend.util.DepartmentMatcher.matches(s.getDepartment(), deptFilter))
-                .filter(s -> semester == null || Objects.equals(s.getSemester(), semester))
+                .filter(s -> {
+                    if (finalTargetSemester != null) {
+                        return Objects.equals(s.getSemester(), finalTargetSemester);
+                    }
+                    if (finalIsOdd != null && s.getSemester() != null) {
+                        return finalIsOdd ? (s.getSemester() % 2 == 1) : (s.getSemester() % 2 == 0);
+                    }
+                    return true;
+                })
                 .sorted(Comparator.comparing(Subject::getSubjectCode))
                 .collect(Collectors.toList());
 
@@ -303,15 +334,34 @@ public class FacultyController {
         List<Batch> batches = batchRepository.findAll().stream()
                 .filter(Batch::isActive)
                 .filter(b -> deptFilter.isEmpty() || com.odysseus.backend.util.DepartmentMatcher.matches(b.getDepartment(), deptFilter))
-                .filter(b -> semester == null || Objects.equals(b.getSemester(), semester))
+                .filter(b -> {
+                    if (finalTargetSemester != null) {
+                        return Objects.equals(b.getSemester(), finalTargetSemester);
+                    }
+                    if (finalIsOdd != null && b.getSemester() != null) {
+                        return finalIsOdd ? (b.getSemester() % 2 == 1) : (b.getSemester() % 2 == 0);
+                    }
+                    return true;
+                })
                 .sorted(Comparator.comparing(Batch::getBatchName))
                 .collect(Collectors.toList());
+
+        // Deduplicate batches by semester and section: exactly ONE batch per section per semester
+        Map<String, Batch> uniqueBatches = new LinkedHashMap<>();
+        for (Batch b : batches) {
+            String bKey = (b.getSemester() != null ? b.getSemester() : 0) + "-" 
+                    + (b.getSection() != null ? b.getSection().trim().toUpperCase() : b.getBatchName().trim());
+            uniqueBatches.putIfAbsent(bKey, b);
+        }
+        batches = new ArrayList<>(uniqueBatches.values());
 
         List<Map<String, Object>> batchList = batches.stream().map(b -> {
             Map<String, Object> bm = new LinkedHashMap<>();
             bm.put("id", b.getId());
             bm.put("batchName", b.getBatchName());
             bm.put("section", b.getSection() != null ? b.getSection() : "");
+            bm.put("semester", b.getSemester());
+            bm.put("department", b.getDepartment());
             return bm;
         }).collect(Collectors.toList());
 
@@ -330,35 +380,70 @@ public class FacultyController {
         List<Map<String, Object>> proposals = new ArrayList<>();
 
         for (Subject subject : subjects) {
-            String targetDept = (subject.getFacultyDepartment() != null && !subject.getFacultyDepartment().isBlank())
-                    ? subject.getFacultyDepartment()
-                    : subject.getDepartment();
+            String coursePrefix = (courseMappingService != null)
+                    ? courseMappingService.extractCoursePrefix(subject.getSubjectCode())
+                    : null;
 
-            // Determine candidate faculty pool: prioritize teaching department (e.g. Math for Discrete Math, ECE for Embedded Systems)
-            List<Faculty> deptMatchedFaculty = allActiveFaculty.stream()
-                    .filter(f -> !f.isHod())
-                    .filter(f -> targetDept != null && !targetDept.isBlank() && com.odysseus.backend.util.DepartmentMatcher.matches(f.getDepartment(), targetDept))
-                    .collect(Collectors.toList());
+            Optional<com.odysseus.backend.domain.CourseDepartmentMapping> mappingOpt = (courseMappingService != null && coursePrefix != null)
+                    ? courseMappingService.resolveMapping(coursePrefix)
+                    : Optional.empty();
 
-            List<Faculty> candidatePool = !deptMatchedFaculty.isEmpty() ? deptMatchedFaculty : allActiveFaculty.stream()
-                    .filter(f -> !f.isHod())
-                    .filter(f -> allocationService.isEligibleForSubject(f, subject))
-                    .collect(Collectors.toList());
+            boolean isMapped = mappingOpt.isPresent()
+                    && !"UNMAPPED".equalsIgnoreCase(mappingOpt.get().getDepartmentKey());
 
-            List<Faculty> eligible = candidatePool.stream()
-                    .filter(f -> f.getEligibleSubjects().stream().anyMatch(s -> Objects.equals(s.getId(), subject.getId()))
-                            || allocationService.isEligibleForSubject(f, subject)
-                            || matchesSpecializationOrSubjects(f, subject)
-                            || (targetDept != null && com.odysseus.backend.util.DepartmentMatcher.matches(f.getDepartment(), targetDept)))
-                    .collect(Collectors.toList());
+            String targetDeptKey = isMapped ? mappingOpt.get().getDepartmentKey() : null;
+
+            if (!isMapped && departmentService != null) {
+                String subDept = subject.getFacultyDepartment() != null && !subject.getFacultyDepartment().isBlank()
+                        ? subject.getFacultyDepartment() : subject.getDepartment();
+                if (subDept != null && !subDept.isBlank() && !subDept.equalsIgnoreCase("ALL")) {
+                    com.odysseus.backend.service.DepartmentService.DepartmentInfo dInfo = departmentService.normalizeDepartment(subDept);
+                    if (!"UNMAPPED".equalsIgnoreCase(dInfo.departmentKey())) {
+                        targetDeptKey = dInfo.departmentKey();
+                        isMapped = true;
+                    }
+                }
+            }
+
+            if (!isMapped && allocationService.isSpecialTestSubject(subject)) {
+                targetDeptKey = (!deptFilter.isEmpty() && departmentService != null)
+                        ? departmentService.normalizeDepartment(deptFilter).departmentKey()
+                        : "CSE";
+                isMapped = true;
+            }
+
+            String unmappedWarning = null;
+            if (!isMapped) {
+                unmappedWarning = "Unknown course department mapping: [" + (coursePrefix != null ? coursePrefix : subject.getSubjectCode())
+                        + "]. Please map this course prefix to a department before assigning faculty.";
+            }
+
+            // Determine candidate faculty pool: strictly filter by matching departmentKey!
+            List<Faculty> eligible = new ArrayList<>();
+            final String finalTargetDeptKey = targetDeptKey;
+            if (isMapped && finalTargetDeptKey != null) {
+                eligible = allActiveFaculty.stream()
+                        .filter(Faculty::isEligibleForTeaching)
+                        .filter(f -> {
+                            String fKey = f.getDepartmentKey();
+                            String fDept = f.getDepartment();
+                            return com.odysseus.backend.util.DepartmentMatcher.matches(fKey, finalTargetDeptKey)
+                                    || com.odysseus.backend.util.DepartmentMatcher.matches(fDept, finalTargetDeptKey);
+                        })
+                        .collect(Collectors.toList());
+            }
+
+            // Fallback: Check explicit eligibility
             if (eligible.isEmpty()) {
-                eligible = candidatePool;
+                eligible = allActiveFaculty.stream()
+                        .filter(Faculty::isEligibleForTeaching)
+                        .filter(f -> f.getEligibleSubjects() != null && f.getEligibleSubjects().stream().anyMatch(s -> Objects.equals(s.getId(), subject.getId())))
+                        .collect(Collectors.toList());
             }
 
             List<Batch> relevantSubjectBatches = batches.stream()
                     .filter(b -> subject.getSemester() == null || Objects.equals(b.getSemester(), subject.getSemester()))
                     .collect(Collectors.toList());
-            if (relevantSubjectBatches.isEmpty()) relevantSubjectBatches = batches;
 
             int weeklyPeriods = allocationService.computeWeeklyHours(subject);
             int totalSectionDemand = relevantSubjectBatches.size() * weeklyPeriods;
@@ -369,19 +454,49 @@ public class FacultyController {
                 requiredCount = Math.min(requiredCount, eligible.size());
             }
 
-            // Suggested faculty: up to requiredCount faculty with lowest current workload
-            List<Long> suggestedFacultyIds = eligible.stream()
-                    .sorted(Comparator.comparingInt(f -> loadTracker.getOrDefault(f.getId(), 0)))
-                    .limit(requiredCount)
-                    .map(Faculty::getId)
-                    .collect(Collectors.toList());
-
-            // Suggested per-section faculty distribution (evenly spreads sections across suggested faculty)
+            // Suggested per-section faculty distribution with cross-section uniqueness:
+            // For the same subject, each section gets a distinct eligible faculty member whenever pool permits
             Map<Long, Long> suggestedSectionFaculty = new LinkedHashMap<>();
-            if (!suggestedFacultyIds.isEmpty()) {
-                for (int i = 0; i < relevantSubjectBatches.size(); i++) {
-                    Long fid = suggestedFacultyIds.get(i % suggestedFacultyIds.size());
-                    suggestedSectionFaculty.put(relevantSubjectBatches.get(i).getId(), fid);
+            List<Long> suggestedFacultyIds = new ArrayList<>();
+            Set<Long> usedForThisSubject = new HashSet<>();
+
+            final int finalWeeklyPeriods = weeklyPeriods;
+            for (Batch b : relevantSubjectBatches) {
+                Faculty chosen = null;
+                int minLoad = Integer.MAX_VALUE;
+
+                // 1. Try to find eligible faculty not yet used for this subject
+                for (Faculty f : eligible) {
+                    if (!usedForThisSubject.contains(f.getId())) {
+                        int load = loadTracker.getOrDefault(f.getId(), 0);
+                        int maxLoad = f.getMaxWeeklyLoad() != null ? f.getMaxWeeklyLoad() : 18;
+                        if (load + finalWeeklyPeriods <= maxLoad && load < minLoad) {
+                            minLoad = load;
+                            chosen = f;
+                        }
+                    }
+                }
+
+                // 2. Fallback if pool is exhausted
+                if (chosen == null) {
+                    minLoad = Integer.MAX_VALUE;
+                    for (Faculty f : eligible) {
+                        int load = loadTracker.getOrDefault(f.getId(), 0);
+                        int maxLoad = f.getMaxWeeklyLoad() != null ? f.getMaxWeeklyLoad() : 18;
+                        if (load + finalWeeklyPeriods <= maxLoad && load < minLoad) {
+                            minLoad = load;
+                            chosen = f;
+                        }
+                    }
+                }
+
+                if (chosen != null) {
+                    usedForThisSubject.add(chosen.getId());
+                    loadTracker.merge(chosen.getId(), finalWeeklyPeriods, Integer::sum);
+                    suggestedSectionFaculty.put(b.getId(), chosen.getId());
+                    if (!suggestedFacultyIds.contains(chosen.getId())) {
+                        suggestedFacultyIds.add(chosen.getId());
+                    }
                 }
             }
 
@@ -401,7 +516,7 @@ public class FacultyController {
 
             // Existing offerings / assigned faculty per section for this subject
             Map<Long, Long> existingSectionFaculty = new HashMap<>();
-            for (Batch b : batches) {
+            for (Batch b : relevantSubjectBatches) {
                 offeringRepository.findAll().stream()
                         .filter(o -> o.isActive() && o.getBatch() != null && Objects.equals(o.getBatch().getId(), b.getId())
                                 && o.getSubject() != null && Objects.equals(o.getSubject().getId(), subject.getId())
@@ -410,19 +525,35 @@ public class FacultyController {
                         .ifPresent(o -> existingSectionFaculty.put(b.getId(), o.getAssignedFaculty().getId()));
             }
 
+            List<Map<String, Object>> relevantBatchList = relevantSubjectBatches.stream().map(b -> {
+                Map<String, Object> bm = new LinkedHashMap<>();
+                bm.put("id", b.getId());
+                bm.put("batchName", b.getBatchName());
+                bm.put("section", b.getSection() != null ? b.getSection() : "");
+                bm.put("semester", b.getSemester());
+                bm.put("department", b.getDepartment());
+                return bm;
+            }).collect(Collectors.toList());
+
             Map<String, Object> proposal = new LinkedHashMap<>();
             proposal.put("subjectId", subject.getId());
             proposal.put("subjectCode", subject.getSubjectCode());
             proposal.put("subjectName", subject.getSubjectName());
             proposal.put("subjectType", subject.getSubjectType());
             proposal.put("department", subject.getDepartment());
+            proposal.put("coursePrefix", coursePrefix != null ? coursePrefix : "");
+            proposal.put("departmentKey", targetDeptKey != null ? targetDeptKey : "UNMAPPED");
+            proposal.put("isMapped", isMapped);
+            proposal.put("mappingStatus", isMapped ? "MAPPED" : "UNMAPPED");
+            proposal.put("unmappedWarning", unmappedWarning);
             proposal.put("semester", subject.getSemester());
             proposal.put("weeklyHours", subject.getCalculatedWeeklyHours());
             proposal.put("requiredFacultyCount", requiredCount);
+            proposal.put("relevantBatches", relevantBatchList);
             proposal.put("eligibleFaculty", eligibleList);
             proposal.put("suggestedFacultyIds", suggestedFacultyIds);
             proposal.put("suggestedSectionFaculty", suggestedSectionFaculty);
-            proposal.put("requiresAdminInput", eligible.isEmpty());
+            proposal.put("requiresAdminInput", eligible.isEmpty() || !isMapped);
             proposal.put("existingSectionFaculty", existingSectionFaculty);
             proposals.add(proposal);
         }
@@ -715,6 +846,92 @@ public class FacultyController {
         ));
     }
 
+    @PostMapping("/batch-assign")
+    @Transactional
+    public ResponseEntity<?> batchAssignSectionFaculty(@RequestBody List<Map<String, Object>> assignments) {
+        if (assignments == null || assignments.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "No assignments provided."));
+        }
+
+        int updatedCount = 0;
+        int createdCount = 0;
+        List<String> warnings = new ArrayList<>();
+
+        for (Map<String, Object> item : assignments) {
+            Long batchId = parseLong(item.get("batchId"));
+            Long subjectId = parseLong(item.get("subjectId"));
+            Long facultyId = parseLong(item.get("facultyId"));
+            String academicYear = item.containsKey("academicYear") ? (String) item.get("academicYear") : "2026 - 2027";
+            Integer semester = parseInteger(item.get("semester"));
+
+            if (batchId == null || subjectId == null) {
+                continue;
+            }
+
+            Batch batch = batchRepository.findById(batchId).orElse(null);
+            Subject subject = subjectRepository.findById(subjectId).orElse(null);
+            if (batch == null || subject == null) {
+                continue;
+            }
+
+            Faculty faculty = null;
+            if (facultyId != null) {
+                faculty = facultyRepository.findById(facultyId).orElse(null);
+                if (faculty != null) {
+                    if (faculty.isPrincipal()) {
+                        warnings.add("Excluded Principal " + faculty.getName() + " from assignment on " + subject.getSubjectCode());
+                        continue;
+                    }
+                    if (faculty.isHod()) {
+                        warnings.add("Excluded HOD " + faculty.getName() + " from assignment on " + subject.getSubjectCode());
+                        continue;
+                    }
+                    if (!faculty.isEligibleForTeaching()) {
+                        warnings.add("Faculty " + faculty.getName() + " is not eligible for teaching.");
+                        continue;
+                    }
+                }
+            }
+
+            List<SubjectOffering> existing = offeringRepository.findByBatchIdAndSubjectId(batchId, subjectId);
+            if (!existing.isEmpty()) {
+                for (SubjectOffering off : existing) {
+                    off.setAssignedFaculty(faculty);
+                    off.setActive(true);
+                    if (academicYear != null) off.setAcademicYear(academicYear);
+                    if (semester != null) off.setSemester(semester);
+                    offeringRepository.save(off);
+                    updatedCount++;
+                }
+            } else {
+                SubjectOffering newOff = SubjectOffering.builder()
+                        .batch(batch)
+                        .subject(subject)
+                        .assignedFaculty(faculty)
+                        .academicYear(academicYear)
+                        .semester(semester != null ? semester : (batch.getSemester() != null ? batch.getSemester() : 3))
+                        .active(true)
+                        .build();
+                offeringRepository.save(newOff);
+                createdCount++;
+            }
+        }
+
+        return ResponseEntity.ok(Map.of(
+                "message", "Successfully saved assignments to Subject Offerings database.",
+                "updated", updatedCount,
+                "created", createdCount,
+                "warnings", warnings
+        ));
+    }
+
+    @PostMapping("/reset-assignments")
+    @Transactional
+    public ResponseEntity<?> resetAllSectionAssignments() {
+        offeringRepository.resetAllAssignments();
+        return ResponseEntity.ok(Map.of("message", "All faculty assignments in Subject Offerings have been reset to Unassigned."));
+    }
+
     private Long parseLong(Object value) {
         if (value == null) return null;
         if (value instanceof Number) return ((Number) value).longValue();
@@ -730,12 +947,23 @@ public class FacultyController {
     @PostMapping(value = "/parse-document", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<?> parseFacultyDocument(
             @RequestParam("file") org.springframework.web.multipart.MultipartFile file,
-            @RequestParam(value = "department", defaultValue = "Computer Science Engineering") String department) {
+            @RequestParam(value = "department", defaultValue = "ALL") String department) {
         try {
             List<Map<String, Object>> facultyList = pdfExtractionService.extractFacultyFromFile(file, department);
+
+            // Compute department-wise breakdown for merged upload response
+            Map<String, Long> departmentCounts = new LinkedHashMap<>();
+            for (Map<String, Object> fac : facultyList) {
+                String d = (String) fac.get("department");
+                if (d != null && !d.trim().isEmpty()) {
+                    departmentCounts.put(d, departmentCounts.getOrDefault(d, 0L) + 1);
+                }
+            }
+
             return ResponseEntity.ok(Map.of(
                     "totalExtracted", facultyList.size(),
                     "preview", facultyList,
+                    "departmentCounts", departmentCounts,
                     "fileName", file.getOriginalFilename() != null ? file.getOriginalFilename() : ""
             ));
         } catch (IllegalArgumentException e) {
@@ -743,6 +971,44 @@ public class FacultyController {
         } catch (Exception e) {
             return ResponseEntity.status(org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", "Unable to extract faculty document: " + e.getMessage()));
+        }
+    }
+
+        @RequestMapping(value = "/load-stored-merged-pdf", method = {RequestMethod.GET, RequestMethod.POST})
+    public ResponseEntity<?> loadStoredMergedPdf() {
+        java.io.File file = new java.io.File("C:/Users/anany/Downloads/Faculty_merged_corrected.pdf");
+        if (!file.exists()) {
+            file = new java.io.File("C:/Users/anany/Downloads/_Faculty_merged.pdf");
+        }
+        if (!file.exists()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Faculty_merged_corrected.pdf not found in system Downloads directory."));
+        }
+        try {
+            byte[] bytes = java.nio.file.Files.readAllBytes(file.toPath());
+            List<Map<String, Object>> facultyList = pdfExtractionService.parseFacultyFromPdfDocument(bytes, "ALL");
+            if (facultyList == null) {
+                facultyList = Collections.emptyList();
+            }
+
+            Map<String, Long> departmentCounts = new LinkedHashMap<>();
+            for (Map<String, Object> fac : facultyList) {
+                String d = (String) fac.get("department");
+                if (d != null && !d.trim().isEmpty()) {
+                    departmentCounts.put(d, departmentCounts.getOrDefault(d, 0L) + 1);
+                }
+            }
+
+            return ResponseEntity.ok(Map.of(
+                    "totalExtracted", facultyList.size(),
+                    "totalDepartments", departmentCounts.size(),
+                    "preview", facultyList,
+                    "departmentCounts", departmentCounts,
+                    "fileName", file.getName()
+            ));
+        } catch (Exception e) {
+            log.error("Failed to load stored merged PDF: {}", e.getMessage(), e);
+            return ResponseEntity.status(org.springframework.http.HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Failed to load stored merged PDF: " + e.getMessage()));
         }
     }
 
@@ -764,14 +1030,23 @@ public class FacultyController {
             }
             dept = dept.trim();
 
-            // 1. Try to find existing faculty by normalized name + department (idempotent re-upload)
+            // 1. Try to find existing faculty by normalized name + department / departmentKey (idempotent re-upload)
             String normName = name.toLowerCase().replaceAll("\\s+", " ").trim();
             final String finalName = name;
             final String finalDept = dept;
+            String deptKey = (String) map.get("departmentKey");
+            if (deptKey == null || deptKey.trim().isEmpty()) {
+                deptKey = departmentService != null ? departmentService.normalizeDepartment(dept).departmentKey() : getDeptCode(dept);
+            } else {
+                deptKey = deptKey.trim().toUpperCase();
+            }
+            final String finalDeptKey = deptKey;
+
             Optional<Faculty> existingByNameDept = facultyRepository.findAll().stream()
                     .filter(f -> f.getName() != null
                             && f.getName().toLowerCase().replaceAll("\\s+", " ").trim().equals(normName)
-                            && com.odysseus.backend.util.DepartmentMatcher.matches(f.getDepartment(), finalDept))
+                            && (com.odysseus.backend.util.DepartmentMatcher.matches(f.getDepartment(), finalDept)
+                                || (f.getDepartmentKey() != null && f.getDepartmentKey().equalsIgnoreCase(finalDeptKey))))
                     .findFirst();
 
             Faculty f;
@@ -787,7 +1062,8 @@ public class FacultyController {
                     if (existingByEmpId.isPresent()) {
                         Faculty existingFac = existingByEmpId.get();
                         // Same department — treat as update
-                        if (com.odysseus.backend.util.DepartmentMatcher.matches(existingFac.getDepartment(), finalDept)) {
+                        if (com.odysseus.backend.util.DepartmentMatcher.matches(existingFac.getDepartment(), finalDept)
+                                || (existingFac.getDepartmentKey() != null && existingFac.getDepartmentKey().equalsIgnoreCase(finalDeptKey))) {
                             f = existingFac;
                             updatedIds.add(empId);
                         } else {
@@ -819,6 +1095,37 @@ public class FacultyController {
             }
             f.setEmail(email);
             f.setDepartment(finalDept);
+            f.setDepartmentKey(finalDeptKey);
+
+            if (map.containsKey("sourceDocument") && map.get("sourceDocument") != null) {
+                f.setSourceDocument((String) map.get("sourceDocument"));
+            } else if (f.getSourceDocument() == null) {
+                f.setSourceDocument("Merged Faculty Master PDF");
+            }
+
+            if (map.containsKey("verificationStatus") && map.get("verificationStatus") != null) {
+                f.setVerificationStatus((String) map.get("verificationStatus"));
+            } else if (f.getVerificationStatus() == null) {
+                f.setVerificationStatus("APPROVED");
+            }
+
+                        if (map.containsKey("qualification")) {
+                f.setQualification((String) map.get("qualification"));
+            }
+            if (map.containsKey("facultyNumber") && map.get("facultyNumber") != null) {
+                f.setFacultyNumber(((Number) map.get("facultyNumber")).intValue());
+            }
+            if (map.containsKey("category")) {
+                f.setCategory((String) map.get("category"));
+            }
+            if (map.containsKey("hod")) {
+                f.setHod(Boolean.TRUE.equals(map.get("hod")));
+            }
+            if (map.containsKey("eligibleForTeaching")) {
+                f.setEligibleForTeaching(Boolean.TRUE.equals(map.get("eligibleForTeaching")));
+            } else {
+                f.setEligibleForTeaching(f.isEligibleForTeaching());
+            }
 
             if (map.containsKey("designation")) {
                 f.setDesignation((String) map.get("designation"));
@@ -905,21 +1212,10 @@ public class FacultyController {
     }
 
     private String getDeptCode(String department) {
-        if (department == null) return "DEPT";
-        if (department.contains("Artificial Intelligence & Machine Learning") || department.contains("AI & ML")) return "CSE-AIML";
-        if (department.contains("Cyber Security")) return "CSE-CS";
-        if (department.equalsIgnoreCase("Computer Science Engineering")) return "CSE";
-        if (department.equalsIgnoreCase("Information Technology")) return "IT";
-        if (department.equalsIgnoreCase("Mechanical Engineering")) return "MECH";
-        if (department.equalsIgnoreCase("Civil Engineering")) return "CIVIL";
-        if (department.equalsIgnoreCase("Electrical & Electronics")) return "EEE";
-        if (department.equalsIgnoreCase("Electronics & Communication Engineering")) return "ECE";
-        if (department.equalsIgnoreCase("Biomedical Engineering")) return "BME";
-        if (department.equalsIgnoreCase("Automobile Engineering")) return "AUTO";
-        if (department.equalsIgnoreCase("Robotics and Automation Engineering")) return "ROBOTICS";
-        if (department.equalsIgnoreCase("AI and Data Science Engineering")) return "AIDS";
-        if (department.contains("Biotechnology")) return "BIOTECH";
-        if (department.contains("Business System")) return "CSBS";
+        if (department == null || department.trim().isEmpty()) return "DEPT";
+        if (departmentService != null) {
+            return departmentService.normalizeDepartment(department).departmentKey();
+        }
         String letters = department.replaceAll("[^A-Z]", "");
         return letters.isEmpty() ? department.substring(0, Math.min(4, department.length())).toUpperCase() : letters;
     }

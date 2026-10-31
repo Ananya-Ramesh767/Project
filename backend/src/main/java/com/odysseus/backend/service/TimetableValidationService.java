@@ -188,6 +188,18 @@ public class TimetableValidationService {
                 errors.add(String.format("Invalid period range P%d-P%d for subject [%s].", start, end, a.getSubject().getSubjectCode()));
             }
 
+            // Reject any placeholder subjects: Free, Library, Self-study
+            if (a.getSubject() != null) {
+                String subCode = a.getSubject().getSubjectCode() != null ? a.getSubject().getSubjectCode().toUpperCase().trim() : "";
+                String subName = a.getSubject().getSubjectName() != null ? a.getSubject().getSubjectName().toUpperCase().trim() : "";
+                if (subCode.contains("FREE") || subName.contains("FREE") 
+                        || subCode.contains("LIBRARY") || subName.contains("LIBRARY")
+                        || subCode.contains("SELF_STUDY") || subName.contains("SELF-STUDY") || subName.contains("SELF STUDY")) {
+                    errors.add(String.format("Placeholder period [%s / %s] detected on %s P%d for section [%s]. Placeholder periods are strictly forbidden.",
+                            subCode, subName, a.getDayOfWeek(), start, a.getBatch() != null ? a.getBatch().getBatchName() : "Unknown"));
+                }
+            }
+
             // Break checks
             if (start <= 2 && end >= 3) {
                 errors.add(String.format("Class block for [%s] on %s crosses Morning Break.", a.getSubject().getSubjectCode(), a.getDayOfWeek()));

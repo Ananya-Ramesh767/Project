@@ -2,8 +2,14 @@
 rem -------------------------------------------------
 rem run-backend.bat – start the Spring Boot backend
 rem -------------------------------------------------
-rem Change to the directory that contains mvnw.cmd
-cd /d "%~dp0"
+cd /d "%~dp0backend"
+set JAVA_HOME=C:\Program Files\Java\jdk-21.0.11
 
-rem Call the wrapper using the absolute path (handles spaces)
-call "%~dp0mvnw.cmd" spring-boot:run
+where mvn >nul 2>&1
+if %ERRORLEVEL% equ 0 (
+    echo Starting backend using system Maven...
+    mvn spring-boot:run
+) else (
+    echo Starting backend using Maven Wrapper...
+    call "%~dp0backend\mvnw.cmd" spring-boot:run
+)

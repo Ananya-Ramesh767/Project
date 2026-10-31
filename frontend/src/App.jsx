@@ -20,6 +20,7 @@ import SyllabusManagementPage from './pages/SyllabusManagementPage';
 import GenerateLessonPlanPage from './pages/GenerateLessonPlanPage';
 import MyLessonPlansPage from './pages/MyLessonPlansPage';
 import DataReadinessPage from './pages/DataReadinessPage';
+import FacultyPortalPage from './pages/FacultyPortalPage';
 
 /** Wraps each routed page with an animated slide-up + correct padding. */
 function Page({ children }) {
@@ -128,6 +129,12 @@ export default function App() {
             } />
 
             {/* Admin + Faculty ────────────────────────────────────────── */}
+            <Route path="/faculty-portal" element={
+              <ProtectedRoute user={user} requiredRole={['ROLE_ADMIN', 'ROLE_FACULTY']}>
+                <Page><FacultyPortalPage user={user} /></Page>
+              </ProtectedRoute>
+            } />
+
             <Route path="/calendar" element={
               <ProtectedRoute user={user} requiredRole={['ROLE_ADMIN', 'ROLE_FACULTY']}>
                 <Page><CalendarManagementPage user={user} /></Page>

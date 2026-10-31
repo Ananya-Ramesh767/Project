@@ -14,23 +14,23 @@
  */
 
 export const MAIN_INSTITUTIONAL_PROGRAMMES = [
-  'Information Technology',
-  'Biomedical Engineering',
+  'Artificial Intelligence and Data Science',
   'Automobile Engineering',
-  'AI and Data Science Engineering',
-  'Computer Science Engineering',
-  'Robotics and Automation Engineering',
+  'Biomedical Engineering',
+  'Biotechnology',
   'Civil Engineering',
-  'Mechanical Engineering',
-  'Electrical & Electronics',
-  'Electronics & Communication Engineering',
+  'Computer Science and Engineering',
   'Computer Science & Engineering (Artificial Intelligence & Machine Learning)',
   'Computer Science & Engineering (Cyber Security)',
-  'B.E. Computer Science and Design',
-  'B.Tech. Biotechnology',
-  'B.Tech. Computer Science and Business System (With TCS partnership)',
-  'MCA',
-  'MBA'
+  'Computer Science and Business Systems',
+  'Computer Science and Design',
+  'Electrical and Electronics Engineering',
+  'Electronics and Communication Engineering',
+  'Information Technology',
+  'Mechanical Engineering',
+  'Master of Business Administration',
+  'Master of Computer Applications',
+  'Robotics and Automation Engineering'
 ];
 
 export const SUPPORTING_FACULTY_DEPARTMENTS = [

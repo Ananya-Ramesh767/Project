@@ -42,6 +42,8 @@ public class FacultyAllocationService {
     private final FacultyAvailabilityRepository availabilityRepository;
     private final TimetableAssignmentRepository timetableAssignmentRepository;
     private final SubjectRepository subjectRepository;
+    private final CourseDepartmentMappingService courseMappingService;
+    private final DepartmentService departmentService;
 
     /**
      * Represents a single faculty-to-section assignment decision.
@@ -95,8 +97,20 @@ public class FacultyAllocationService {
         // Build faculty unavailability set: facultyId -> Set<"DAY-P{period}">
         Map<Long, Set<String>> unavailabilityMap = buildUnavailabilityMap(allFaculty);
 
+        // Deduplicate batches by semester and section: exactly ONE batch per section per semester
+        Map<String, Batch> uniqueBatches = new LinkedHashMap<>();
+        for (Batch b : batches) {
+            if (b == null) continue;
+            String sec = b.getSection() != null && !b.getSection().trim().isEmpty()
+                    ? b.getSection().trim().toUpperCase()
+                    : (b.getBatchName() != null ? b.getBatchName().trim() : String.valueOf(b.getId()));
+            String key = (b.getSemester() != null ? b.getSemester() : 0) + "-" + sec;
+            uniqueBatches.putIfAbsent(key, b);
+        }
+        List<Batch> effectiveBatches = new ArrayList<>(uniqueBatches.values());
+
         log.info("[Allocation] Starting allocation for {} subjects × {} sections (dept={})",
-                subjects.size(), batches.size(), department != null ? department : "ALL");
+                subjects.size(), effectiveBatches.size(), department != null ? department : "ALL");
 
         for (Subject subject : subjects) {
             boolean isDeptSubject = isDepartmentSubject(subject, department);
@@ -111,7 +125,7 @@ public class FacultyAllocationService {
                         + ". Add faculty eligibility in Faculty Master → Review & Confirm.";
                 warnings.add(msg);
                 infeasibleSubjects.add(subject.getSubjectCode());
-                log.warn("[Allocation] {} — skipping all {} sections", msg, batches.size());
+                log.warn("[Allocation] {} — skipping all {} sections", msg, effectiveBatches.size());
                 continue;
             }
 
@@ -120,8 +134,9 @@ public class FacultyAllocationService {
                     candidates.size(),
                     candidates.stream().map(Faculty::getName).collect(Collectors.joining(", ")));
 
-            // Allocate per section
-            for (Batch batch : batches) {
+            // Allocate per section with cross-section uniqueness for the same subject
+            Set<Long> assignedToThisSubject = new HashSet<>();
+            for (Batch batch : effectiveBatches) {
                 // Filter batches to match subject semester if subject has explicit semester
                 if (subject.getSemester() != null && !subject.getSemester().equals(batch.getSemester())) {
                     continue;
@@ -131,8 +146,9 @@ public class FacultyAllocationService {
                 Long existingFacultyId = existingOfferingFaculty.get(encodeBatchSubjectKey(batch.getId(), subject.getId()));
                 if (respectExistingAssignments && existingFacultyId != null) {
                     Faculty existing = allFaculty.stream()
-                            .filter(f -> f.getId().equals(existingFacultyId)).findFirst().orElse(null);
+                            .filter(f -> f.getId().equals(existingFacultyId) && f.isEligibleForTeaching()).findFirst().orElse(null);
                     if (existing != null) {
+                        assignedToThisSubject.add(existing.getId());
                         decisions.add(new AllocationDecision(
                                 batch.getId(), batch.getBatchName(),
                                 subject.getId(), subject.getSubjectCode(),
@@ -143,8 +159,8 @@ public class FacultyAllocationService {
                     }
                 }
 
-                // Pick best candidate: eligible, available capacity, lowest load
-                Faculty selected = selectBestCandidate(candidates, loadMap, unavailabilityMap, weeklyHours, subject, batch);
+                // Pick best candidate: eligible, available capacity, lowest load, NOT already assigned to this subject
+                Faculty selected = selectBestCandidate(candidates, loadMap, unavailabilityMap, weeklyHours, subject, batch, assignedToThisSubject);
 
                 if (selected == null) {
                     // All candidates are over capacity — fall back to least loaded regardless
@@ -169,6 +185,7 @@ public class FacultyAllocationService {
                     continue;
                 }
 
+                assignedToThisSubject.add(selected.getId());
                 // Update in-memory load tracker immediately so next section benefits
                 loadMap.merge(selected.getId(), weeklyHours, Integer::sum);
 
@@ -212,67 +229,83 @@ public class FacultyAllocationService {
         if (subject == null) return false;
         String name = subject.getSubjectName() != null ? subject.getSubjectName().toLowerCase() : "";
         String code = subject.getSubjectCode() != null ? subject.getSubjectCode().toLowerCase() : "";
-        return name.contains("aptitude test") || name.contains("technical test")
-                || name.contains("aptitude & reasoning") || name.contains("technical assessment")
-                || code.contains("apt") || code.contains("tec")
-                || code.equals("aptitude") || code.equals("technical_test");
+        return name.contains("aptitude") || name.contains("technical test")
+                || name.contains("counselling") || name.contains("counseling")
+                || name.contains("library") || name.contains("assessment")
+                || name.contains("leetcode") || name.contains("leet code")
+                || code.contains("apt") || code.contains("tec") || code.contains("cou") || code.contains("lib")
+                || code.contains("lee");
     }
 
     /**
-     * Build the candidate pool for a subject.
-     * For department subjects: prefer faculty from the same department.
-     * For common/special subjects: use all faculty with eligibility.
+     * Build the candidate pool for a subject using generic course prefix to department mapping.
+     * Flow per Master Prompt Section 6:
+     * Subject -> Course Code -> Extract Prefix -> Find Approved Department Mapping -> Resolve Department Key -> Retrieve Faculty with Matching Department Key
      */
     private List<Faculty> buildCandidatePool(Subject subject, List<Faculty> allFaculty,
                                               String department, boolean isDeptSubject) {
-        List<Faculty> pool;
-
-        // Exclude HODs strictly from teaching candidate pool
-        List<Faculty> nonHodFaculty = allFaculty.stream()
-                .filter(f -> !f.isHod())
+        // Exclude HODs, lab technicians, and non-teaching staff strictly from teaching candidate pool
+        List<Faculty> eligibleFaculty = allFaculty.stream()
+                .filter(Faculty::isEligibleForTeaching)
                 .collect(Collectors.toList());
 
-        // Special Rule for Semesters 3-8: Aptitude tests, technical tests, and equivalent activities
-        // MUST only be assigned to faculty from the particular main department selected for the class.
-        // Supporting departments (Math, Physics, Chemistry, English) MUST NOT be assigned to these activities.
-        boolean isSem3To8 = subject.getSemester() != null && subject.getSemester() >= 3 && subject.getSemester() <= 8;
-        if (isSem3To8 && isSpecialTestSubject(subject)) {
-            String targetDept = (department != null && !department.isBlank()) ? department : subject.getDepartment();
-            pool = nonHodFaculty.stream()
+        // 1. Resolve department key via Course Code Prefix -> Department Mapping
+        String targetDeptKey = null;
+        if (courseMappingService != null && subject.getSubjectCode() != null) {
+            String prefix = courseMappingService.extractCoursePrefix(subject.getSubjectCode());
+            if (prefix != null) {
+                Optional<CourseDepartmentMapping> mappingOpt = courseMappingService.resolveMapping(prefix);
+                if (mappingOpt.isPresent() && ("APPROVED".equalsIgnoreCase(mappingOpt.get().getApprovalStatus()) || "MAPPED".equalsIgnoreCase(mappingOpt.get().getStatus()))
+                        && !"UNMAPPED".equalsIgnoreCase(mappingOpt.get().getDepartmentKey())) {
+                    targetDeptKey = mappingOpt.get().getDepartmentKey();
+                }
+            }
+        }
+
+        // Common/special tests fallback to curriculum department
+        if (targetDeptKey == null && isSpecialTestSubject(subject)) {
+            targetDeptKey = (department != null && !department.isBlank() && !department.equalsIgnoreCase("ALL"))
+                    ? (departmentService != null ? departmentService.normalizeDepartment(department).departmentKey() : "CSE")
+                    : "CSE";
+        }
+
+        // Fallback to subject's normalized department if explicit
+        if (targetDeptKey == null && departmentService != null) {
+            String subDept = subject.getFacultyDepartment() != null && !subject.getFacultyDepartment().isBlank()
+                    ? subject.getFacultyDepartment() : subject.getDepartment();
+            if (subDept != null && !subDept.isBlank()) {
+                targetDeptKey = departmentService.normalizeDepartment(subDept).departmentKey();
+            }
+        }
+
+        final String finalTargetDeptKey = targetDeptKey;
+
+        // 2. Filter faculty whose normalized departmentKey matches the subject's departmentKey
+        if (finalTargetDeptKey != null && !"UNMAPPED".equalsIgnoreCase(finalTargetDeptKey)) {
+            List<Faculty> matched = eligibleFaculty.stream()
                     .filter(f -> {
-                        String fDept = f.getDepartment() != null ? f.getDepartment() : "";
-                        boolean isSupporting = fDept.equalsIgnoreCase("Mathematics") || fDept.equalsIgnoreCase("Physics")
-                                || fDept.equalsIgnoreCase("Chemistry") || fDept.equalsIgnoreCase("English");
-                        return !isSupporting && DepartmentMatcher.matches(f.getDepartment(), targetDept);
+                        String fKey = f.getDepartmentKey();
+                        String fDept = f.getDepartment();
+                        return DepartmentMatcher.matches(fKey, finalTargetDeptKey)
+                                || DepartmentMatcher.matches(fDept, finalTargetDeptKey);
                     })
                     .collect(Collectors.toList());
 
-            if (!pool.isEmpty()) {
-                return pool;
+            if (!matched.isEmpty()) {
+                return matched;
             }
         }
 
-        if (isDeptSubject && department != null) {
-            // Try department-specific eligible faculty first
-            pool = nonHodFaculty.stream()
-                    .filter(f -> isEligibleForSubject(f, subject))
-                    .filter(f -> DepartmentMatcher.matches(f.getDepartment(), department))
-                    .collect(Collectors.toList());
-
-            // If no dept-specific eligible faculty, broaden to all eligible non-HOD
-            if (pool.isEmpty()) {
-                pool = nonHodFaculty.stream()
-                        .filter(f -> isEligibleForSubject(f, subject))
-                        .collect(Collectors.toList());
-            }
-        } else {
-            // Common/non-department subject — all eligible non-HOD faculty
-            pool = nonHodFaculty.stream()
-                    .filter(f -> isEligibleForSubject(f, subject))
-                    .collect(Collectors.toList());
+        // Fallback: Check explicit eligibility
+        List<Faculty> explicitMatches = eligibleFaculty.stream()
+                .filter(f -> f.getEligibleSubjects() != null && f.getEligibleSubjects().stream().anyMatch(s -> Objects.equals(s.getId(), subject.getId())))
+                .collect(Collectors.toList());
+        if (!explicitMatches.isEmpty()) {
+            return explicitMatches;
         }
 
-        return pool;
+        // Unmapped or no matching department faculty -> return empty candidate pool
+        return Collections.emptyList();
     }
 
     /**
@@ -281,9 +314,26 @@ public class FacultyAllocationService {
      */
     private Faculty selectBestCandidate(List<Faculty> candidates, Map<Long, Integer> loadMap,
                                          Map<Long, Set<String>> unavailabilityMap,
-                                         int weeklyHours, Subject subject, Batch batch) {
+                                         int weeklyHours, Subject subject, Batch batch,
+                                         Set<Long> alreadyAssignedToSubject) {
+        // 1. Prefer candidate NOT already assigned to this subject across sections
+        Optional<Faculty> unassignedToSubject = candidates.stream()
+                .filter(Faculty::isEligibleForTeaching)
+                .filter(f -> alreadyAssignedToSubject == null || !alreadyAssignedToSubject.contains(f.getId()))
+                .filter(f -> {
+                    int currentLoad = loadMap.getOrDefault(f.getId(), 0);
+                    int maxLoad = f.getMaxWeeklyLoad() != null ? f.getMaxWeeklyLoad() : 18;
+                    return (currentLoad + weeklyHours) <= maxLoad;
+                })
+                .min(Comparator.comparingInt(f -> loadMap.getOrDefault(f.getId(), 0)));
+
+        if (unassignedToSubject.isPresent()) {
+            return unassignedToSubject.get();
+        }
+
+        // 2. Fallback only if candidate pool is smaller than section count
         return candidates.stream()
-                .filter(f -> !f.isHod())
+                .filter(Faculty::isEligibleForTeaching)
                 .filter(f -> {
                     int currentLoad = loadMap.getOrDefault(f.getId(), 0);
                     int maxLoad = f.getMaxWeeklyLoad() != null ? f.getMaxWeeklyLoad() : 18;
@@ -295,106 +345,53 @@ public class FacultyAllocationService {
 
     /**
      * Check if a faculty member is eligible for a subject.
-     * Strictly excludes HODs.
-     * Evaluates explicit eligibility, cross-disciplinary department mapping, and specialization text matches.
+     * Evaluates explicit eligibility and generic course prefix to department mapping.
      */
     public boolean isEligibleForSubject(Faculty f, Subject subject) {
         if (f == null || subject == null) return false;
+        if (!f.isEligibleForTeaching()) return false;
 
-        // Strict HOD exclusion: HODs must not be assigned to regular classes
-        if (f.isHod()) return false;
-
-        // Special Rule for Semesters 3-8: Aptitude tests & technical tests cannot be assigned to supporting departments
-        boolean isSem3To8 = subject.getSemester() != null && subject.getSemester() >= 3 && subject.getSemester() <= 8;
-        if (isSem3To8 && isSpecialTestSubject(subject)) {
-            String fDept = f.getDepartment() != null ? f.getDepartment() : "";
-            if (fDept.equalsIgnoreCase("Mathematics") || fDept.equalsIgnoreCase("Physics")
-                    || fDept.equalsIgnoreCase("Chemistry") || fDept.equalsIgnoreCase("English")) {
-                return false;
-            }
-        }
-
-        // 1. Explicit eligibility (primary — set via Faculty Master)
+        // 1. Explicit eligibility (primary)
         if (f.getEligibleSubjects() != null) {
             boolean explicit = f.getEligibleSubjects().stream()
                     .anyMatch(s -> Objects.equals(s.getId(), subject.getId()));
             if (explicit) return true;
         }
 
-        String subName = subject.getSubjectName() != null ? subject.getSubjectName().toLowerCase() : "";
-        String subCode = subject.getSubjectCode() != null ? subject.getSubjectCode().toLowerCase() : "";
-        String fDept = f.getDepartment() != null ? f.getDepartment().toLowerCase() : "";
-
-        // 2. Cross-disciplinary subject-to-department/expertise mapping per institutional rules
-        // Chemistry subjects -> Chemistry faculty
-        if ((subName.contains("chemistry") || subName.contains("environmental")) && (fDept.contains("chem") || fDept.contains("science"))) {
-            return true;
-        }
-
-        // Physics & Semiconductor subjects -> Physics or appropriately qualified Electronics faculty
-        if ((subName.contains("physics") || subName.contains("semiconductor") || subName.contains("optics") || subName.contains("electromagnet"))
-                && (fDept.contains("phy") || fDept.contains("science") || fDept.contains("electronics") || fDept.contains("ece"))) {
-            return true;
-        }
-
-        // Mathematics subjects -> Mathematics faculty
-        if ((subName.contains("math") || subName.contains("discrete") || subName.contains("algebra")
-                || subName.contains("calculus") || subName.contains("probability") || subName.contains("statistics")
-                || subName.contains("numerical")) && (fDept.contains("math") || fDept.contains("science"))) {
-            return true;
-        }
-
-        // English / Communication subjects -> English or Humanities faculty
-        if ((subName.contains("english") || subName.contains("communication") || subName.contains("technical english")
-                || subName.contains("career skill")) && (fDept.contains("english") || fDept.contains("humanities"))) {
-            return true;
-        }
-
-        // Core CSE / IT subjects
-        boolean isCseSub = subName.contains("parallel processing") || subName.contains("theory of computation")
-                || subName.contains("data structure") || subName.contains("operating system")
-                || subName.contains("computer architecture") || subName.contains("computer network")
-                || subName.contains("compiler") || subName.contains("software engineering")
-                || subName.contains("database") || subName.contains("full stack")
-                || subName.contains("devops") || subName.contains("cloud")
-                || subName.contains("python") || subName.contains("java");
-
-        boolean isCseFaculty = DepartmentMatcher.matches(f.getDepartment(), "Computer Science Engineering")
-                || DepartmentMatcher.matches(f.getDepartment(), "Information Technology");
-
-        if (isCseSub && isCseFaculty) {
-            return true;
-        }
-
-        // Departmental co-curricular, skill development, testing, mentoring or counselling subjects
-        boolean isDepartmentalGeneral = subName.contains("aptitude") || subName.contains("technical test")
-                || subName.contains("career skill") || subName.contains("nptel") || subName.contains("leet")
-                || subName.contains("counsel") || subName.contains("mentor") || subName.contains("library")
-                || subName.contains("soft skill") || subName.contains("aiml") || subName.contains("faiml");
-        if (isDepartmentalGeneral && DepartmentMatcher.matches(f.getDepartment(), subject.getDepartment())) {
-            return true;
-        }
-
-        // 3. Text-based match from subjectsHandled / specialization (from PDF upload)
-        String spec = (f.getSpecialization() != null ? f.getSpecialization() : "").toLowerCase();
-        String handled = (f.getSubjectsHandled() != null ? f.getSubjectsHandled() : "").toLowerCase();
-        String combined = spec + " " + handled;
-
-        if (combined.isBlank()) return false;
-
-        if (!subCode.isEmpty() && combined.contains(subCode)) return true;
-        if (!subName.isEmpty() && combined.contains(subName)) return true;
-
-        // 4. Keyword match on significant words (≥4 chars, not stop-words)
-        Set<String> stopWords = Set.of("intro", "introduction", "fundamentals", "applied",
-                "engineering", "science", "theory", "laboratory", "advanced",
-                "course", "basics", "studies", "principles");
-        for (String word : subName.split("[^a-z0-9]+")) {
-            if (word.length() >= 4 && !stopWords.contains(word) && combined.contains(word)) {
-                return true;
+        // 2. Resolve subject departmentKey via Course Code prefix
+        String subjectDeptKey = null;
+        if (courseMappingService != null && subject.getSubjectCode() != null) {
+            String prefix = courseMappingService.extractCoursePrefix(subject.getSubjectCode());
+            if (prefix != null) {
+                Optional<CourseDepartmentMapping> mappingOpt = courseMappingService.resolveMapping(prefix);
+                if (mappingOpt.isPresent() && "APPROVED".equalsIgnoreCase(mappingOpt.get().getApprovalStatus())
+                        && !"UNMAPPED".equalsIgnoreCase(mappingOpt.get().getDepartmentKey())) {
+                    subjectDeptKey = mappingOpt.get().getDepartmentKey();
+                }
             }
         }
-        return false;
+
+        if (subjectDeptKey == null && departmentService != null) {
+            String subDept = subject.getFacultyDepartment() != null && !subject.getFacultyDepartment().isBlank()
+                    ? subject.getFacultyDepartment() : subject.getDepartment();
+            if (subDept != null && !subDept.isBlank()) {
+                subjectDeptKey = departmentService.normalizeDepartment(subDept).departmentKey();
+            }
+        }
+
+        if (subjectDeptKey == null || "UNMAPPED".equalsIgnoreCase(subjectDeptKey)) {
+            return false;
+        }
+
+        String facultyDeptKey = f.getDepartmentKey();
+        if (facultyDeptKey == null || facultyDeptKey.isBlank()) {
+            if (departmentService != null) {
+                facultyDeptKey = departmentService.normalizeDepartment(f.getDepartment()).departmentKey();
+            }
+        }
+
+        // Default eligibility rule: subject.departmentKey === faculty.departmentKey
+        return facultyDeptKey != null && facultyDeptKey.equalsIgnoreCase(subjectDeptKey);
     }
 
     // ── Workload Tracking ──────────────────────────────────────────────────────

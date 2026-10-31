@@ -84,11 +84,14 @@ public class SecurityConfig {
                 // 7. Core Administrative Modules: Faculty, Rooms, Subjects, Batches, Offerings, Readiness, Timeslots, NEP rules
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
 
-                // 8. Lesson Plan Overview: Admin only; Personal tracking & retrieval: Authenticated Faculty / Admin
+                // 8. Faculty Portal: Authenticated Faculty & Admin
+                .requestMatchers("/api/faculty/**").hasAnyRole("ADMIN", "FACULTY")
+
+                // 9. Lesson Plan Overview: Admin only; Personal tracking & retrieval: Authenticated Faculty / Admin
                 .requestMatchers("/api/lesson-plan/admin/**").hasRole("ADMIN")
                 .requestMatchers("/api/lesson-plan/**").authenticated()
 
-                // 9. All other requests require authentication
+                // 10. All other requests require authentication
                 .anyRequest().authenticated()
             )
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

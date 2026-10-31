@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, BookOpen, Users, DoorOpen, Layers,
   BookMarked, Calendar, Clock, Sliders, PlayCircle, LogOut,
-  ListChecks, CalendarClock, Table, ShieldCheck
+  ListChecks, CalendarClock, Table, ShieldCheck, UserCheck
 } from 'lucide-react';
 
 const NavItem = ({ to, icon: Icon, children }) => (
@@ -27,9 +27,9 @@ export default function Sidebar({ user, onLogout }) {
 
       {/* Brand */}
       <div className="brand-header">
-        <div className="brand-logo">O</div>
+        <div className="brand-logo" style={{ fontSize: '0.9rem', fontWeight: 800 }}>EEC</div>
         <div style={{ minWidth: 0 }}>
-          <h1 className="brand-title">Odysseus</h1>
+          <h1 className="brand-title" style={{ fontSize: '1.05rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Easwari Eng. College</h1>
           <span style={{ fontSize: '0.62rem', color: 'var(--accent-secondary)', letterSpacing: '0.07em', fontWeight: 700, textTransform: 'uppercase' }}>
             {isAdmin ? 'Admin Suite' : 'Faculty Portal'}
           </span>
@@ -55,6 +55,7 @@ export default function Sidebar({ user, onLogout }) {
             <NavItem to="/readiness"  icon={ShieldCheck}>Data Readiness</NavItem>
             <NavItem to="/generate"   icon={PlayCircle}>Generate Timetable</NavItem>
             <NavItem to="/timetable"  icon={Table}>View Timetables</NavItem>
+            <NavItem to="/faculty-portal" icon={UserCheck}>Faculty Portal</NavItem>
 
             <div className="nav-section-title">Lesson Planning</div>
             <NavItem to="/syllabus"     icon={ListChecks}>Syllabus Management</NavItem>
@@ -65,6 +66,7 @@ export default function Sidebar({ user, onLogout }) {
         {!isAdmin && (
           <>
             <div className="nav-section-title">My Workspace</div>
+            <NavItem to="/faculty-portal"  icon={UserCheck}>Faculty Dashboard</NavItem>
             <NavItem to="/timetable"       icon={Table}>Section Timetables</NavItem>
             <NavItem to="/my-lesson-plans" icon={BookMarked}>My Lesson Plans</NavItem>
             <NavItem to="/lesson-plan"     icon={CalendarClock}>Lesson Plan View</NavItem>

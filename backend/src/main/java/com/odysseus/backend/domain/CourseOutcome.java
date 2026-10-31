@@ -23,7 +23,7 @@ public class CourseOutcome {
     @Column(nullable = false)
     private Integer coNumber; // 1..N, matches the curriculum doc's "CO1..CO5" numbering exactly
 
-    @Column(nullable = false, length = 1000)
+    @Column(nullable = false, length = 4000)
     private String description;
 
     @Builder.Default

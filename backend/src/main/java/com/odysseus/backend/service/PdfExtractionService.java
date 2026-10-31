@@ -31,6 +31,9 @@ import java.util.regex.Pattern;
 @Slf4j
 public class PdfExtractionService {
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private DepartmentService departmentService;
+
     private static final String OCR_POWERSHELL_SCRIPT =
         "param ([string]$ImagePath)\n" +
         "Add-Type -AssemblyName System.Runtime.WindowsRuntime\n" +
@@ -300,8 +303,8 @@ public class PdfExtractionService {
 
     /**
      * High-level entry point for extracting faculty records from an uploaded file.
-     * Tries fast text-based extraction first. If the document has no text layer or returns 0 records,
-     * automatically invokes the Windows OCR image-extraction pipeline for scanned PDFs.
+     * Tries specialized multi-page PDF table parser first for structured faculty PDFs.
+     * Falls back to text-based extraction and then OCR for scanned images.
      */
     public List<Map<String, Object>> extractFacultyFromFile(MultipartFile file, String defaultDepartment) throws IOException {
         if (file == null || file.isEmpty()) {
@@ -309,6 +312,20 @@ public class PdfExtractionService {
         }
 
         String fileName = file.getOriginalFilename() != null ? file.getOriginalFilename().toLowerCase() : "";
+
+        // Strategy 0: High-precision page-by-page table parser for merged faculty documents
+        if (fileName.endsWith(".pdf") || (file.getContentType() != null && file.getContentType().toLowerCase().contains("pdf"))) {
+            try {
+                List<Map<String, Object>> pdfResults = parseFacultyFromPdfDocument(file.getBytes(), defaultDepartment);
+                if (pdfResults != null && pdfResults.size() >= 5) {
+                    log.info("Extracted {} faculty members via page-by-page PDF table parser for [{}]", pdfResults.size(), defaultDepartment);
+                    return pdfResults;
+                }
+            } catch (Exception e) {
+                log.warn("Page-by-page table parser encountered issue, falling back: {}", e.getMessage());
+            }
+        }
+
         String text = "";
         try {
             text = extractTextFromFile(file);
@@ -341,7 +358,255 @@ public class PdfExtractionService {
     }
 
     /**
+     * Parses structured faculty and staff records page-by-page from a merged PDF document.
+     * Detects department headers, S.No-indexed entries, designations, qualifications,
+     * specializations, categories (TEACHING, HOD, LAB_TECHNICIAN, NON_TEACHING),
+     * and strictly computes teaching eligibility.
+     */
+    public List<Map<String, Object>> parseFacultyFromPdfDocument(byte[] pdfBytes, String defaultDepartment) {
+        List<Map<String, Object>> results = new ArrayList<>();
+        try (PDDocument doc = Loader.loadPDF(pdfBytes)) {
+            PDFTextStripper stripper = new PDFTextStripper();
+            stripper.setSortByPosition(true);
+
+            String currentDept = (defaultDepartment != null && !defaultDepartment.equalsIgnoreCase("ALL"))
+                    ? defaultDepartment : "Artificial Intelligence and Data Science";
+            String sectionCat = "TEACHING";
+            Map<String, Integer> deptCounters = new HashMap<>();
+
+            Pattern rowPattern = Pattern.compile("^(\\d{1,3})\\s+((?:Dr\\.?|Prof\\.?|Mr\\.?|Mrs\\.?|Ms\\.?|Mx\\.?|Sri\\.?|Smt\\.?)?\\s*[A-Za-z][A-Za-z .'-]{1,50}?)(?:\\s+(?:[A-Za-z.,& ]*(?:B\\.Sc|M\\.Sc|B\\.E|M\\.E|MCA|Ph\\.D|B\\.Tech|M\\.Tech|D\\.E|ITI)[^a-zA-Z0-9]*(?:\\s*\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4})?))?\\s+(Professor(?:\\s*(?:and|&)?\\s*(?:HOD|Head(?:\\s+of\\s+the\\s+Department)?)?)?|Associate\\s*Prof(?:essor|\\.|\\b)|Assistant\\s*Prof(?:essor|\\.|\\b)|Asst\\.?\\s*Prof(?:essor|\\.|\\b)|Assoc\\.?\\s*Prof(?:essor|\\.|\\b)|Prof(?:essor|\\.|\\b)|Lab\\s*Assistant|LAB\\s*PROGRAMMER|Lab\\s*Programmer|Programmer|Technician)(.*)$", Pattern.CASE_INSENSITIVE);
+
+            for (int p = 1; p <= doc.getNumberOfPages(); p++) {
+                stripper.setStartPage(p);
+                stripper.setEndPage(p);
+                String text = stripper.getText(doc);
+                if (text == null || text.isBlank()) continue;
+
+                String[] lines = text.split("\\r?\\n");
+                for (int i = 0; i < lines.length; i++) {
+                    String line = lines[i];
+                    String trimmed = line.trim();
+                    if (trimmed.isEmpty()) continue;
+
+                    Matcher mDept = Pattern.compile("(?i)Department of ([A-Za-z0-9 &(),/-]+)").matcher(trimmed);
+                    if (mDept.find()) {
+                        String cand = mDept.group(1).trim();
+                        // Lookahead for wrapped multi-line department headers (e.g. AIML, Cyber, CSBS, ECE)
+                        for (int k = i + 1; k < Math.min(i + 3, lines.length); k++) {
+                            String next = lines[k].trim();
+                            if (next.isEmpty()) continue;
+                            if (next.startsWith("(") || next.matches("(?i)^(Engineering|Systems|Technology|Science|Design).*")
+                                    || next.matches("(?i)^\\(.*\\)$")) {
+                                cand = cand + " " + next;
+                            }
+                            break;
+                        }
+
+                        if (!cand.toLowerCase().contains("srm") && !cand.toLowerCase().contains("easwari")
+                                && !cand.toLowerCase().contains("faculty list") && !cand.toLowerCase().contains("faculty directory")) {
+                            if (departmentService != null) {
+                                currentDept = departmentService.normalizeDepartment(cand).departmentName();
+                            } else {
+                                currentDept = cand;
+                            }
+                            sectionCat = "TEACHING";
+                        }
+                    }
+
+                    String lower = trimmed.toLowerCase();
+                    if (lower.contains("technical staff") || lower.contains("lab programmer") || lower.contains("lab assistant") || lower.contains("lab staff")) {
+                        sectionCat = "LAB_TECHNICIAN";
+                    } else if (lower.contains("non-teaching") || lower.contains("supporting staff")) {
+                        sectionCat = "NON_TEACHING";
+                    } else if (lower.contains("teaching staff") || (lower.contains("faculty") && !lower.contains("s.no") && !lower.contains("name of"))) {
+                        sectionCat = "TEACHING";
+                    }
+
+                    Matcher rm = rowPattern.matcher(trimmed);
+                    if (rm.matches()) {
+                        int sNo = Integer.parseInt(rm.group(1));
+                        String name = rm.group(2).trim();
+                        String designation = rm.group(3).trim();
+                        String rest = rm.group(4) != null ? rm.group(4).trim() : "";
+
+                        String desLower = designation.toLowerCase();
+                        String restLower = rest.toLowerCase();
+                        boolean isHod = desLower.contains("hod") || desLower.contains("head")
+                                || restLower.contains("hod") || restLower.contains("head")
+                                || sNo == 1 && (restLower.contains("head") || restLower.contains("hod"));
+
+                        if (isHod && restLower.contains("hod")) {
+                            designation = designation + " (HOD)";
+                            rest = rest.replaceAll("(?i)^[/\\s]*(hod|head of the department|head of department|head)[,/\\s]*", "").trim();
+                        }
+
+                        String cat = sectionCat;
+                        if (isHod) {
+                            cat = "HOD";
+                        } else if (desLower.contains("lab") || desLower.contains("programmer")
+                                || desLower.contains("technician") || desLower.contains("assistant programmer")
+                                || restLower.contains("lab assistant") || restLower.contains("lab programmer")) {
+                            cat = "LAB_TECHNICIAN";
+                        }
+
+                        boolean eligible = cat.equals("TEACHING") && !isHod;
+
+                        String qualification = "";
+                        String specialization = "";
+                        if (!rest.isEmpty()) {
+                            if (rest.toLowerCase().contains("mca") || rest.toLowerCase().contains("m.sc")
+                                    || rest.toLowerCase().contains("b.sc") || rest.toLowerCase().contains("b.e")
+                                    || rest.toLowerCase().contains("m.e") || rest.toLowerCase().contains("ph.d")
+                                    || rest.toLowerCase().contains("b.tech") || rest.toLowerCase().contains("m.tech")) {
+                                qualification = rest;
+                            } else {
+                                specialization = rest;
+                            }
+                        }
+
+                        int countInDept = deptCounters.getOrDefault(currentDept, 0) + 1;
+                        deptCounters.put(currentDept, countInDept);
+
+                        Map<String, Object> map = new LinkedHashMap<>();
+                        String deptCode = getShortDeptCode(currentDept);
+                        String empId = String.format("FAC-%s-%03d", deptCode, countInDept);
+                        map.put("employeeId", empId);
+                        map.put("facultyNumber", countInDept);
+                        map.put("name", cleanFacultyName(name));
+                        map.put("designation", designation);
+                        map.put("qualification", qualification);
+                        map.put("specialization", specialization);
+                        map.put("category", cat);
+                        map.put("eligibleForTeaching", eligible);
+                        map.put("hod", isHod);
+                        map.put("maxWeeklyLoad", 18);
+                        enrichDepartmentInfo(map, currentDept);
+
+                        String cleanN = name.replaceAll("(?i)^(Dr\\.?|Prof\\.?|Mr\\.?|Mrs\\.?|Ms\\.?)\\s*", "").trim();
+                        String emailPrefix = cleanN.toLowerCase().replaceAll("[^a-z0-9]", ".");
+                        map.put("email", emailPrefix + "@eec.srmrmp.edu.in");
+
+                        results.add(map);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Error parsing PDF document: {}", e.getMessage());
+        }
+        return results;
+    }
+
+    private boolean isSectionHeaderOrDept(String line) {
+        if (line == null) return false;
+        String l = line.toLowerCase().trim();
+        return l.startsWith("department of") || l.equals("technical staff") || l.equals("non-teaching staff")
+                || l.equals("teaching staff") || l.equals("faculty") || l.equals("faculty directory")
+                || l.equals("faculty & staff directory") || l.startsWith("s.no") || l.startsWith("s.n")
+                || l.equals("lab programmers") || l.equals("lab assistants") || l.equals("lab staff");
+    }
+
+    private String getShortDeptCode(String department) {
+        if (department == null) return "GEN";
+        String lower = department.toLowerCase();
+        if (lower.contains("artificial intelligence") && lower.contains("data science")) return "AIDS";
+        if (lower.contains("automobile")) return "AUTO";
+        if (lower.contains("biomedical")) return "BME";
+        if (lower.contains("biotechnology")) return "BIOTECH";
+        if (lower.contains("chemistry")) return "CHEM";
+        if (lower.contains("civil")) return "CIVIL";
+        if (lower.contains("business") && lower.contains("systems")) return "CSBS";
+        if (lower.contains("design") && lower.contains("csd")) return "CSD";
+        if (lower.contains("machine learning") || lower.contains("aiml")) return "AIML";
+        if (lower.contains("cyber")) return "CYBER";
+        if (lower.contains("computer science") || lower.contains("cse")) return "CSE";
+        if (lower.contains("electrical") && lower.contains("electronics")) return "EEE";
+        if (lower.contains("electronics") && lower.contains("communication")) return "ECE";
+        if (lower.contains("english")) return "ENG";
+        if (lower.contains("information technology") || lower.equals("it")) return "IT";
+        if (lower.contains("business administration") || lower.contains("mba")) return "MBA";
+        if (lower.contains("computer applications") || lower.contains("mca")) return "MCA";
+        if (lower.contains("mathematics") || lower.contains("math")) return "MATH";
+        if (lower.contains("mechanical") || lower.contains("mech")) return "MECH";
+        if (lower.contains("physics")) return "PHYS";
+        if (lower.contains("robotics")) return "ROBOTICS";
+        return "GEN";
+    }
+
+    /**
+     * Detects academic department from text heading or token in a merged PDF document.
+     * Integrates with DepartmentService for dynamic department identification.
+     */
+    public String detectDepartmentFromText(String line) {
+        if (line == null) return null;
+        String s = line.trim();
+        if (s.isEmpty() || s.length() > 100) return null;
+
+        // Skip lines that have honorifics (these are faculty names, not department headings)
+        if (s.matches("(?i).*\\b(Dr\\.?|Prof\\.?|Mr\\.?|Mrs\\.?|Ms\\.?|Mx\\.?|Sri\\.?|Smt\\.?)\\b.*")) {
+            return null;
+        }
+
+        // Check if line contains a department header indicator or standalone department name
+        boolean isDeptHeader = s.matches("(?i).*\\b(department of|dept\\.? of|school of|faculty list|faculty members)\\b.*")
+                || s.matches("(?i)^[0-9IVX\\.\\-\\s]*DEPARTMENT.*")
+                || s.matches("(?i)^[A-Z\\s&,-]{4,60}$");
+
+        if (departmentService != null) {
+            DepartmentService.DepartmentInfo info = departmentService.normalizeDepartment(s);
+            if (!"UNMAPPED".equalsIgnoreCase(info.departmentKey())) {
+                return info.departmentName();
+            }
+        }
+
+        String lower = s.toLowerCase();
+        if (lower.contains("mathematics") || lower.contains("maths") || lower.matches("(?i)^\\s*math\\s*$")) return "Mathematics";
+        if (lower.contains("physics")) return "Physics";
+        if (lower.contains("chemistry")) return "Chemistry";
+        if (lower.contains("english")) return "English";
+        if (lower.contains("computer science & engineering (artificial intelligence & machine learning)") || lower.contains("cse-aiml")) 
+            return "Computer Science & Engineering (Artificial Intelligence & Machine Learning)";
+        if (lower.contains("computer science and business") || lower.contains("csbs")) return "Computer Science and Business Systems";
+        if (lower.contains("computer science and design") || lower.contains("csd")) return "Computer Science and Design";
+        if (lower.contains("cyber security") || lower.contains("cyber")) return "CSE (Cyber Security)";
+        if (lower.contains("computer science") || lower.contains("cse") || lower.contains("comp. sci")) return "Computer Science and Engineering";
+        if (lower.contains("information technology") || lower.matches("(?i)^\\s*it\\s*$")) return "Information Technology";
+        if (lower.contains("electronics & communication") || lower.contains("ece") || lower.contains("electronics and communication")) return "Electronics and Communication Engineering";
+        if (lower.contains("electrical & electronics") || lower.contains("eee") || lower.contains("electrical and electronics")) return "Electrical and Electronics Engineering";
+        if (lower.contains("mechanical") || lower.matches("(?i)^\\s*mech\\s*$")) return "Mechanical Engineering";
+        if (lower.contains("civil")) return "Civil Engineering";
+        if (lower.contains("data science") || lower.contains("aids") || lower.contains("ai and data science") || lower.contains("artificial intelligence and data science")) return "Artificial Intelligence and Data Science";
+        if (lower.contains("biotechnology")) return "Biotechnology";
+        if (lower.contains("biomedical")) return "Biomedical Engineering";
+        if (lower.contains("automobile")) return "Automobile Engineering";
+        if (lower.contains("robotics")) return "Robotics and Automation";
+        if (lower.matches("(?i)^\\s*mca\\s*$") || lower.contains("master of computer applications")) return "Master of Computer Applications";
+        if (lower.matches("(?i)^\\s*mba\\s*$") || lower.contains("master of business administration")) return "Master of Business Administration";
+
+        return null;
+    }
+
+    /**
+     * Enriches a faculty map with normalized canonical department name, stable departmentKey,
+     * and flags requiresReview if the department is uncertain or unmapped.
+     */
+    public void enrichDepartmentInfo(Map<String, Object> map, String currentDept) {
+        if (departmentService != null && currentDept != null && !currentDept.isBlank()) {
+            DepartmentService.DepartmentInfo info = departmentService.normalizeDepartment(currentDept);
+            map.put("department", info.departmentName());
+            map.put("departmentKey", info.departmentKey());
+            map.put("requiresReview", "UNMAPPED".equalsIgnoreCase(info.departmentKey()));
+        } else {
+            String d = (currentDept != null && !currentDept.isBlank()) ? currentDept : "Unassigned Department";
+            String k = (currentDept != null && !currentDept.isBlank()) ? DepartmentService.deriveKeyFromName(currentDept) : "UNMAPPED";
+            map.put("department", d);
+            map.put("departmentKey", k);
+            map.put("requiresReview", currentDept == null || currentDept.isBlank() || "UNMAPPED".equalsIgnoreCase(k));
+        }
+    }
+
+    /**
      * Extracts structured faculty members from raw text or PDF content.
+     * Supports merged documents across multiple departments.
      *
      * Multi-strategy pipeline:
      *  A) Detect delimiter-separated table (|, \t, ;, ,) with flexible header mapping
@@ -393,9 +658,16 @@ public class PdfExtractionService {
             Set<String> seenNames = new HashSet<>();
             int empCounter = 1;
 
+            String currentDeptA = (defaultDepartment != null && !defaultDepartment.equalsIgnoreCase("ALL")) ? defaultDepartment : null;
             for (int i = headerLineIdx + 1; i < lines.length; i++) {
                 String line = lines[i].trim();
                 if (line.isEmpty()) continue;
+
+                String detected = detectDepartmentFromText(line);
+                if (detected != null && !line.matches("(?i).*\\b(Dr\\.?|Prof\\.?|Mr\\.?|Mrs\\.?|Ms\\.?)\\b.*")) {
+                    currentDeptA = detected;
+                    continue;
+                }
 
                 String[] tokens = line.split(detectedDelimiter, -1);
                 if (tokens.length < 2) continue;
@@ -436,8 +708,8 @@ public class PdfExtractionService {
                 }
 
                 // Fallback department
-                if (dept.isEmpty()) {
-                    dept = defaultDepartment != null ? defaultDepartment : "CSE";
+                if (dept.isEmpty() || dept.equalsIgnoreCase("ALL")) {
+                    dept = currentDeptA != null ? currentDeptA : "Computer Science and Engineering";
                 }
 
                 Map<String, Object> map = new LinkedHashMap<>();
@@ -446,7 +718,7 @@ public class PdfExtractionService {
                 map.put("designation",   designation);
                 map.put("email",         email);
                 map.put("phone",         phone);
-                map.put("department",    dept);
+                enrichDepartmentInfo(map, dept);
                 map.put("specialization", spec);
                 map.put("subjects",      subjects);
                 map.put("maxWeeklyLoad", 18);
@@ -476,19 +748,44 @@ public class PdfExtractionService {
 
         Set<String> seenNames = new HashSet<>();
         int empCounter = 1;
+        String currentDeptC = (defaultDepartment != null && !defaultDepartment.equalsIgnoreCase("ALL")) ? defaultDepartment : "Computer Science Engineering";
 
         for (String line : lines) {
             String trimmed = line.trim();
-            if (trimmed.isEmpty() || isGarbageLine(trimmed)) continue;
+            if (trimmed.isEmpty()) continue;
+
+            String detected = detectDepartmentFromText(trimmed);
+            if (detected != null && !trimmed.matches("(?i).*\\b(Dr\\.?|Prof\\.?|Mr\\.?|Mrs\\.?|Ms\\.?)\\b.*")) {
+                currentDeptC = detected;
+                continue;
+            }
+
+            if (isGarbageLine(trimmed)) continue;
 
             Matcher nm = nameLinePattern.matcher(trimmed);
             while (nm.find()) {
                 String prefix = nm.group(1).trim();
-                String rawName = nm.group(2).trim();
-                if (rawName.contains(" - ")) rawName = rawName.substring(0, rawName.indexOf(" - ")).trim();
-                else if (rawName.contains(" – ")) rawName = rawName.substring(0, rawName.indexOf(" – ")).trim();
-                else if (rawName.contains(" | ")) rawName = rawName.substring(0, rawName.indexOf(" | ")).trim();
-                else if (rawName.contains(",")) rawName = rawName.substring(0, rawName.indexOf(",")).trim();
+                String rawNameWithRest = nm.group(2).trim();
+                String rawName = rawNameWithRest;
+                String rest = "";
+
+                if (rawName.contains(" - ")) {
+                    int idx = rawName.indexOf(" - ");
+                    rest = rawName.substring(idx + 3).trim();
+                    rawName = rawName.substring(0, idx).trim();
+                } else if (rawName.contains(" – ")) {
+                    int idx = rawName.indexOf(" – ");
+                    rest = rawName.substring(idx + 3).trim();
+                    rawName = rawName.substring(0, idx).trim();
+                } else if (rawName.contains(" | ")) {
+                    int idx = rawName.indexOf(" | ");
+                    rest = rawName.substring(idx + 3).trim();
+                    rawName = rawName.substring(0, idx).trim();
+                } else if (rawName.contains(",")) {
+                    int idx = rawName.indexOf(",");
+                    rest = rawName.substring(idx + 1).trim();
+                    rawName = rawName.substring(0, idx).trim();
+                }
 
                 String fullName = cleanFacultyName(prefix + " " + rawName);
                 if (fullName.isEmpty()) continue;
@@ -496,6 +793,17 @@ public class PdfExtractionService {
                 String norm = fullName.toLowerCase().replaceAll("\\s+", " ");
                 if (seenNames.contains(norm)) continue;
                 seenNames.add(norm);
+
+                // Parse designation and specialization from remainder
+                String designation = "";
+                String specialization = "";
+                if (!rest.isEmpty()) {
+                    String[] parts = rest.split("[,|–-]", 2);
+                    designation = parts[0].trim();
+                    if (parts.length > 1) {
+                        specialization = parts[1].trim();
+                    }
+                }
 
                 // Try to extract email and ID from same line
                 Matcher em = emailPattern.matcher(trimmed);
@@ -505,18 +813,18 @@ public class PdfExtractionService {
                 String empId = im.find() ? im.group().trim() : String.format("FAC-%04d", empCounter++);
 
                 if (email == null || email.isEmpty()) {
-                    email = fullName.toLowerCase().replaceAll("[^a-z]", ".") + "@odysseus.edu";
+                    email = fullName.toLowerCase().replaceAll("[^a-z]", ".").replaceAll("\\.+", ".") + "@odysseus.edu";
                 }
 
                 Map<String, Object> map = new LinkedHashMap<>();
                 map.put("employeeId",    empId);
                 map.put("name",          fullName);
-                map.put("designation",   "");
+                map.put("designation",   designation);
                 map.put("email",         email);
                 map.put("phone",         "");
-                map.put("department",    defaultDepartment != null ? defaultDepartment : "CSE");
-                map.put("specialization", "");
-                map.put("subjects",      "");
+                enrichDepartmentInfo(map, currentDeptC);
+                map.put("specialization", specialization);
+                map.put("subjects",      specialization);
                 map.put("maxWeeklyLoad", 18);
                 facultyList.add(map);
             }
@@ -532,9 +840,19 @@ public class PdfExtractionService {
             );
             Set<String> seenNum = new HashSet<>();
             int numEmpCounter = 1;
+            String currentDeptD = (defaultDepartment != null && !defaultDepartment.equalsIgnoreCase("ALL")) ? defaultDepartment : "Computer Science Engineering";
             for (String line : lines) {
                 String trimmed = line.trim();
-                if (trimmed.isEmpty() || isGarbageLine(trimmed)) continue;
+                if (trimmed.isEmpty()) continue;
+
+                String detected = detectDepartmentFromText(trimmed);
+                if (detected != null && !trimmed.matches("(?i).*\\b(Dr\\.?|Prof\\.?|Mr\\.?|Mrs\\.?|Ms\\.?)\\b.*")) {
+                    currentDeptD = detected;
+                    continue;
+                }
+
+                if (isGarbageLine(trimmed)) continue;
+
                 Matcher nm = numberedNamePattern.matcher(trimmed);
                 if (nm.matches()) {
                     String rawName = nm.group(1).trim();
@@ -543,18 +861,27 @@ public class PdfExtractionService {
                     String norm = fullName.toLowerCase().replaceAll("\\s+", " ");
                     if (seenNum.contains(norm)) continue;
                     seenNum.add(norm);
-                    String designation = nm.group(2) != null ? nm.group(2).trim() : "";
+                    String remainder = nm.group(2) != null ? nm.group(2).trim() : "";
+                    String designation = "";
+                    String specialization = "";
+                    if (!remainder.isEmpty()) {
+                        String[] parts = remainder.split("[,|–-]", 2);
+                        designation = parts[0].trim();
+                        if (parts.length > 1) {
+                            specialization = parts[1].trim();
+                        }
+                    }
                     String empId = String.format("FAC-%04d", numEmpCounter++);
-                    String email = fullName.toLowerCase().replaceAll("[^a-z]", ".") + "@odysseus.edu";
+                    String email = fullName.toLowerCase().replaceAll("[^a-z]", ".").replaceAll("\\.+", ".") + "@odysseus.edu";
                     Map<String, Object> map = new LinkedHashMap<>();
                     map.put("employeeId", empId);
                     map.put("name", fullName);
                     map.put("designation", designation);
                     map.put("email", email);
                     map.put("phone", "");
-                    map.put("department", defaultDepartment != null ? defaultDepartment : "CSE");
-                    map.put("specialization", "");
-                    map.put("subjects", "");
+                    enrichDepartmentInfo(map, currentDeptD);
+                    map.put("specialization", specialization);
+                    map.put("subjects", specialization);
                     map.put("maxWeeklyLoad", 18);
                     facultyList.add(map);
                 }
@@ -643,9 +970,17 @@ public class PdfExtractionService {
             );
             Set<String> seenE = new HashSet<>();
             int eCounter = 1;
+            String currentDeptE = (defaultDepartment != null && !defaultDepartment.equalsIgnoreCase("ALL")) ? defaultDepartment : "Computer Science Engineering";
             for (String line : lines) {
                 String trimmed = line.trim();
-                if (trimmed.isEmpty() || isGarbageLine(trimmed) || trimmed.length() > 100) continue;
+                if (trimmed.isEmpty()) continue;
+                // Check if this line is a department header
+                String detected = detectDepartmentFromText(trimmed);
+                if (detected != null && !trimmed.matches("(?i).*\\b(Dr\\.?|Prof\\.?|Mr\\.?|Mrs\\.?|Ms\\.?)\\b.*")) {
+                    currentDeptE = detected;
+                    continue;
+                }
+                if (isGarbageLine(trimmed) || trimmed.length() > 100) continue;
                 // Skip lines that are headers/labels
                 String lower = trimmed.toLowerCase();
                 if (lower.contains("name") && lower.contains("id")) continue;
@@ -667,7 +1002,7 @@ public class PdfExtractionService {
                     map.put("designation", "");
                     map.put("email", email);
                     map.put("phone", "");
-                    map.put("department", defaultDepartment != null ? defaultDepartment : "CSE");
+                    enrichDepartmentInfo(map, currentDeptE);
                     map.put("specialization", "");
                     map.put("subjects", "");
                     map.put("maxWeeklyLoad", 18);
@@ -690,7 +1025,7 @@ public class PdfExtractionService {
                     map.put("designation", "");
                     map.put("email", email);
                     map.put("phone", "");
-                    map.put("department", defaultDepartment != null ? defaultDepartment : "CSE");
+                    enrichDepartmentInfo(map, currentDeptE);
                     map.put("specialization", "");
                     map.put("subjects", "");
                     map.put("maxWeeklyLoad", 18);
@@ -1444,6 +1779,10 @@ public class PdfExtractionService {
                 String line = rawLines[l].trim();
                 if (line.isEmpty() || line.toLowerCase().startsWith("unit") || line.toLowerCase().startsWith("module") || line.length() < 3) {
                     continue;
+                }
+                // Stop parsing topics if textbook, reference, or outcome section is encountered
+                if (line.matches("(?i)^(?:TEXT\\s*BOOKS?|REFERENCES?|REFERENCE\\s+BOOKS?|COURSE\\s+OUTCOMES?|OUTCOMES?|TOTAL\\s*[:–-]?\\s*\\d+|TOTAL\\s+PERIODS|WEB\\s+REFERENCES?|SUGGESTED\\s+READINGS?).*")) {
+                    break;
                 }
                 // Filter out repeated headers and page numbers
                 if (line.matches("(?i)^(?:page\\s+\\d+|anna\\s+university|regulation\\s+\\d+|department\\s+of).*")) {

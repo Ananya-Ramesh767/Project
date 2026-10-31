@@ -15,8 +15,7 @@ PDFs/PPTX/DOCX.
   Lesson plan preparation" — a constraint-based, forecast-aware scheduling engine
   for flexible credit-based curricula (NEP 2020).
 - Three-way split documented in `SCHEDULER_CONTRACT.md` and
-  `Odysseus_Person_A_Admin_Data_Layer_Final.md` (both at repo root, on
-  `features/admin-data-inputs`):
+  `Easwari_Engineering_College_Person_A_Admin_Data_Layer_Final.md` (both at repo root):
   - **Person A (Ananya)** — admin/data layer: Subject/Faculty/Room/Batch masters,
     SubjectOffering, AcademicCalendar + CalendarHoliday, CollegeTimeslot, NepCreditRule,
     auth (JWT), data-readiness checks. **DONE** — do not re-implement or break this.

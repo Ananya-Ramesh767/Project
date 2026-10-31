@@ -29,6 +29,7 @@ public class OfferingController {
     private final SubjectRepository subjectRepository;
     private final FacultyRepository facultyRepository;
     private final FacultyAllocationService allocationService;
+    private final com.odysseus.backend.service.DepartmentService departmentService;
 
     @GetMapping
     public ResponseEntity<List<SubjectOffering>> getAllOfferings(
@@ -136,6 +137,15 @@ public class OfferingController {
                 })
                 .sorted(Comparator.comparing(Batch::getBatchName))
                 .collect(Collectors.toList());
+
+        // Deduplicate batches by semester and section: exactly ONE batch per section per semester
+        Map<String, Batch> uniqueBatches = new LinkedHashMap<>();
+        for (Batch b : batches) {
+            String bKey = (b.getSemester() != null ? b.getSemester() : 0) + "-" 
+                    + (b.getSection() != null ? b.getSection().trim().toUpperCase() : b.getBatchName().trim());
+            uniqueBatches.putIfAbsent(bKey, b);
+        }
+        batches = new ArrayList<>(uniqueBatches.values());
 
         if (batches.isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of(
@@ -334,6 +344,15 @@ public class OfferingController {
                             || com.odysseus.backend.util.DepartmentMatcher.matches(b.getDepartment(), department))
                     .collect(Collectors.toList());
 
+            // Deduplicate batches by semester and section: exactly ONE batch per section per semester
+            Map<String, Batch> uniqueBatches = new LinkedHashMap<>();
+            for (Batch b : allBatches) {
+                String bKey = (b.getSemester() != null ? b.getSemester() : 0) + "-" 
+                        + (b.getSection() != null ? b.getSection().trim().toUpperCase() : b.getBatchName().trim());
+                uniqueBatches.putIfAbsent(bKey, b);
+            }
+            allBatches = new ArrayList<>(uniqueBatches.values());
+
             List<Faculty> allFaculty = facultyRepository.findAll().stream()
                     .filter(Faculty::isActive)
                     .collect(Collectors.toList());
@@ -384,18 +403,27 @@ public class OfferingController {
 
     private void ensureDepartmentSections(String department, Integer semester) {
         if (department == null || semester == null || department.equalsIgnoreCase("ALL") || department.contains("[object")) return;
+        String canonicalDept = department;
+        if (departmentService != null) {
+            var info = departmentService.normalizeDepartment(department);
+            if (info != null && info.departmentName() != null && !info.departmentName().isBlank()) {
+                canonicalDept = info.departmentName();
+            }
+        }
         char[] sections = {'A', 'B', 'C', 'D', 'E', 'F', 'G'};
-        String deptCode = getDeptCode(department);
+        String deptCode = getDeptCode(canonicalDept);
         for (char sec : sections) {
             String secStr = String.valueOf(sec);
+            final String finalCanonical = canonicalDept;
             boolean exists = batchRepository.findAll().stream()
                     .anyMatch(b -> b.isActive()
-                            && com.odysseus.backend.util.DepartmentMatcher.matches(b.getDepartment(), department)
+                            && (com.odysseus.backend.util.DepartmentMatcher.matches(b.getDepartment(), finalCanonical)
+                                || (b.getBatchName() != null && b.getBatchName().equalsIgnoreCase(deptCode + "-" + secStr)))
                             && Objects.equals(b.getSemester(), semester)
                             && secStr.equalsIgnoreCase(b.getSection()));
             if (!exists) {
                 batchRepository.save(Batch.builder()
-                        .department(department)
+                        .department(canonicalDept)
                         .semester(semester)
                         .section(secStr)
                         .batchName(deptCode + "-" + secStr)
@@ -411,7 +439,7 @@ public class OfferingController {
         if (department == null) return "DEPT";
         if (department.contains("Artificial Intelligence & Machine Learning") || department.contains("AI & ML")) return "CSE-AIML";
         if (department.contains("Cyber Security")) return "CSE-CS";
-        if (department.equalsIgnoreCase("Computer Science Engineering")) return "CSE";
+        if (department.equalsIgnoreCase("Computer Science Engineering") || department.equalsIgnoreCase("Computer Science and Engineering")) return "CSE";
         if (department.equalsIgnoreCase("Information Technology")) return "IT";
         if (department.equalsIgnoreCase("Mechanical Engineering")) return "MECH";
         if (department.equalsIgnoreCase("Civil Engineering")) return "CIVIL";

@@ -1,10 +1,17 @@
 package com.odysseus.backend.util;
 
+import com.odysseus.backend.service.DepartmentService;
+
+/**
+ * Generic Department Matcher.
+ *
+ * Normalizes variations and checks equivalence using generic canonical keys
+ * and alias definitions.
+ */
 public class DepartmentMatcher {
 
     /**
-     * Checks whether two department strings match, supporting case-insensitivity,
-     * abbreviations (e.g. CSE vs Computer Science Engineering), and common variants.
+     * Checks whether two department strings refer to the same department identity.
      */
     public static boolean matches(String dept1, String dept2) {
         if (dept1 == null || dept2 == null) {
@@ -18,62 +25,92 @@ public class DepartmentMatcher {
             return true;
         }
 
-        // Computer Science Engineering variants
-        boolean aCse = isCse(a);
-        boolean bCse = isCse(b);
-        if (aCse && bCse) return true;
+        if (a.equalsIgnoreCase("ALL") || b.equalsIgnoreCase("ALL")) {
+            return true;
+        }
 
-        // Information Technology variants
-        boolean aIt = isIt(a);
-        boolean bIt = isIt(b);
-        if (aIt && bIt) return true;
+        // Compare normalized alphanumeric strings
+        String normA = DepartmentService.normalizeForComparison(DepartmentService.cleanDepartmentString(a));
+        String normB = DepartmentService.normalizeForComparison(DepartmentService.cleanDepartmentString(b));
+        if (!normA.isEmpty() && normA.equals(normB)) {
+            return true;
+        }
 
-        // Mechanical variants
-        boolean aMech = a.equalsIgnoreCase("MECH") || a.equalsIgnoreCase("Mechanical Engineering");
-        boolean bMech = b.equalsIgnoreCase("MECH") || b.equalsIgnoreCase("Mechanical Engineering");
-        if (aMech && bMech) return true;
+        // Compare derived acronym / keys
+        String keyA = DepartmentService.deriveKeyFromName(a);
+        String keyB = DepartmentService.deriveKeyFromName(b);
+        if (!keyA.isEmpty() && !keyA.equals("DEPT") && keyA.equalsIgnoreCase(keyB)) {
+            return true;
+        }
 
-        // Civil variants
-        boolean aCivil = a.equalsIgnoreCase("CIVIL") || a.equalsIgnoreCase("Civil Engineering");
-        boolean bCivil = b.equalsIgnoreCase("CIVIL") || b.equalsIgnoreCase("Civil Engineering");
-        if (aCivil && bCivil) return true;
-
-        // EEE variants
-        boolean aEee = a.equalsIgnoreCase("EEE") || a.equalsIgnoreCase("Electrical & Electronics") || a.equalsIgnoreCase("Electrical and Electronics Engineering");
-        boolean bEee = b.equalsIgnoreCase("EEE") || b.equalsIgnoreCase("Electrical & Electronics") || b.equalsIgnoreCase("Electrical and Electronics Engineering");
-        if (aEee && bEee) return true;
-
-        // ECE variants
-        boolean aEce = a.equalsIgnoreCase("ECE") || a.equalsIgnoreCase("Electronics & Communication Engineering") || a.equalsIgnoreCase("Electronics and Communication Engineering");
-        boolean bEce = b.equalsIgnoreCase("ECE") || b.equalsIgnoreCase("Electronics & Communication Engineering") || b.equalsIgnoreCase("Electronics and Communication Engineering");
-        if (aEce && bEce) return true;
-
-        // AI & DS variants
-        boolean aAids = a.equalsIgnoreCase("AIDS") || a.equalsIgnoreCase("AI and Data Science Engineering") || a.equalsIgnoreCase("Artificial Intelligence and Data Science");
-        boolean bAids = b.equalsIgnoreCase("AIDS") || b.equalsIgnoreCase("AI and Data Science Engineering") || b.equalsIgnoreCase("Artificial Intelligence and Data Science");
-        if (aAids && bAids) return true;
-
-        // AI & ML variants
-        boolean aAiml = a.toLowerCase().contains("artificial intelligence & machine learning") || a.toLowerCase().contains("ai & ml") || a.equalsIgnoreCase("CSE-AIML");
-        boolean bAiml = b.toLowerCase().contains("artificial intelligence & machine learning") || b.toLowerCase().contains("ai & ml") || b.equalsIgnoreCase("CSE-AIML");
-        if (aAiml && bAiml) return true;
+        // Common abbreviation checks
+        if (isCse(a) && isCse(b)) return true;
+        if (isIt(a) && isIt(b)) return true;
+        if (isMech(a) && isMech(b)) return true;
+        if (isCivil(a) && isCivil(b)) return true;
+        if (isEee(a) && isEee(b)) return true;
+        if (isEce(a) && isEce(b)) return true;
+        if (isAids(a) && isAids(b)) return true;
+        if (isMath(a) && isMath(b)) return true;
+        if (isPhy(a) && isPhy(b)) return true;
+        if (isChem(a) && isChem(b)) return true;
+        if (isEng(a) && isEng(b)) return true;
 
         return false;
     }
 
     private static boolean isCse(String s) {
-        if (s == null) return false;
         String lower = s.trim().toLowerCase();
-        return lower.equals("cse")
-                || lower.equals("computer science engineering")
-                || lower.equals("computer science & engineering")
-                || lower.equals("computer science and engineering");
+        return lower.startsWith("cse") || lower.contains("computer science") || lower.equals("cs");
     }
 
     private static boolean isIt(String s) {
-        if (s == null) return false;
         String lower = s.trim().toLowerCase();
-        return lower.equals("it")
-                || lower.equals("information technology");
+        return lower.equals("it") || lower.contains("information technology");
+    }
+
+    private static boolean isMech(String s) {
+        String lower = s.trim().toLowerCase();
+        return lower.startsWith("mech") || lower.contains("mechanical") || lower.equals("me");
+    }
+
+    private static boolean isCivil(String s) {
+        String lower = s.trim().toLowerCase();
+        return lower.equals("civil") || lower.equals("ce");
+    }
+
+    private static boolean isEee(String s) {
+        String lower = s.trim().toLowerCase();
+        return lower.startsWith("eee") || lower.equals("ee") || lower.contains("electrical");
+    }
+
+    private static boolean isEce(String s) {
+        String lower = s.trim().toLowerCase();
+        return lower.startsWith("ece") || lower.equals("ec") || lower.contains("electronics and communication") || lower.contains("electronics & communication");
+    }
+
+    private static boolean isAids(String s) {
+        String lower = s.trim().toLowerCase();
+        return lower.startsWith("aids") || lower.contains("data science") || lower.equals("ai&ds");
+    }
+
+    private static boolean isMath(String s) {
+        String lower = s.trim().toLowerCase();
+        return lower.startsWith("math") || lower.contains("mathematics") || lower.startsWith("mathem");
+    }
+
+    private static boolean isPhy(String s) {
+        String lower = s.trim().toLowerCase();
+        return lower.startsWith("phy") || lower.contains("physics") || lower.startsWith("physic");
+    }
+
+    private static boolean isChem(String s) {
+        String lower = s.trim().toLowerCase();
+        return lower.startsWith("chem") || lower.contains("chemistry") || lower.startsWith("chemis");
+    }
+
+    private static boolean isEng(String s) {
+        String lower = s.trim().toLowerCase();
+        return lower.startsWith("eng") || lower.contains("english") || lower.startsWith("englis");
     }
 }

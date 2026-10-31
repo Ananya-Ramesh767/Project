@@ -2,6 +2,8 @@ package com.odysseus.backend.repository;
 
 import com.odysseus.backend.domain.TimetableAssignment;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -13,5 +15,8 @@ public interface TimetableAssignmentRepository extends JpaRepository<TimetableAs
     List<TimetableAssignment> findByDayOfWeekAndActiveTrue(String dayOfWeek);
     List<TimetableAssignment> findByRoomIdAndActiveTrue(Long roomId);
     List<TimetableAssignment> findByActiveTrue();
+
+    @Modifying
+    @Transactional
     void deleteByBatchId(Long batchId);
 }

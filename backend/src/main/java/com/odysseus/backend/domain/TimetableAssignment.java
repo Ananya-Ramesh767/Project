@@ -3,8 +3,18 @@ package com.odysseus.backend.domain;
 import jakarta.persistence.*;
 import lombok.*;
 
+/**
+ * Entity representing a single scheduled assignment (lecture, lab, or special activity).
+ * Composite uniqueness is enforced on batch, subject, academic year, semester, day, period,
+ * lab flag and activity type to prevent accidental duplicate rows while still allowing
+ * legitimate multiple periods (e.g., multi‑period labs or special activities).
+ */
 @Entity
-@Table(name = "timetable_assignments")
+@Table(name = "timetable_assignments",
+       uniqueConstraints = @UniqueConstraint(columnNames = {
+               "batch_id", "subject_id", "academic_year", "semester",
+               "day_of_week", "period_number", "is_lab_block", "activity_type"
+       }))
 @Getter
 @Setter
 @NoArgsConstructor
@@ -36,15 +46,16 @@ public class TimetableAssignment {
     private String dayOfWeek; // MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY
 
     @Column(nullable = false)
-    private Integer periodNumber; // 1, 2, 3, 4, 5, 6, 7, 8
+    private Integer periodNumber; // 1‑8
 
     @Builder.Default
-    private Integer durationPeriods = 1; // 1 for theory/tutorial, 2 or 3 for continuous lab blocks
+    private Integer durationPeriods = 1; // 1 for theory/tutorial, 2‑3 for continuous lab blocks
 
     @Builder.Default
     private boolean isLabBlock = false;
 
-    // ACADEMIC, LAB, APTITUDE, TECHNICAL_TEST, NPTEL, COUNSELLING, LEETCODE, CAREER_SKILL_DEVELOPMENT, FREE
+    // Activity types: ACADEMIC, LAB, APTITUDE, TECHNICAL_TEST, NPTEL, COUNSELLING,
+    // LEETCODE, CAREER_SKILL_DEVELOPMENT, FREE, etc.
     @Builder.Default
     private String activityType = "ACADEMIC";
 

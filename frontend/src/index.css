@@ -59,9 +59,9 @@
   --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
 
   /* Layout */
-  --sidebar-w: 270px;
-  --content-max: 1280px;
-  --content-pad: 2rem 2.5rem;
+  --sidebar-w: 265px;
+  --content-max: 1560px;
+  --content-pad: 1.75rem 2.25rem;
 }
 
 /* ─── Reset ─────────────────────────────────────────────────────────────── */

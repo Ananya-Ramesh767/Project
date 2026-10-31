@@ -106,11 +106,11 @@ export default function LoginPage({ onLogin }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', padding: '1.5rem', background: 'var(--bg-gradient)', backgroundAttachment: 'fixed' }}>
       <div className="fade-in-up" style={{ textAlign: 'center', marginBottom: '2.25rem' }}>
-        <div className="brand-wordmark" style={{ fontSize: '2.5rem', lineHeight: 1 }}>
-          Odysseus
+        <div className="brand-wordmark" style={{ fontSize: '2.2rem', lineHeight: 1.1 }}>
+          Easwari Engineering College
         </div>
         <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginTop: '0.5rem' }}>
-          Academic Management & Constraint-Safe Timetable Platform
+          Academic Management &amp; Smart Timetable Scheduler
         </p>
       </div>
 
@@ -161,7 +161,7 @@ export default function LoginPage({ onLogin }) {
           </div>
 
           <button type="submit" className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', padding: '0.9rem', fontSize: '0.95rem' }} disabled={loading}>
-            {loading ? 'Authenticating…' : <>Sign In to Odysseus <ArrowRight size={16} /></>}
+            {loading ? 'Authenticating…' : <>Sign In <ArrowRight size={16} /></>}
           </button>
         </form>
 
