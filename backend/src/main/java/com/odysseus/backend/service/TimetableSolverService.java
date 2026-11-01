@@ -93,6 +93,82 @@ public class TimetableSolverService {
 
     private record SlotKey(String dayOfWeek, int periodNumber) {}
 
+    public static class SpecialActivityDefinition {
+        private final String code;
+        private final String title;
+        private final String day;
+        private final int startPeriod;
+        private final int periodCount;
+        private final String sessionType;
+        private final String activityType;
+        private final List<String> aliases;
+
+        public SpecialActivityDefinition(String code, String title, String day, int startPeriod, int periodCount, String activityType, List<String> aliases) {
+            this.code = code;
+            this.title = title;
+            this.day = day;
+            this.startPeriod = startPeriod;
+            this.periodCount = periodCount;
+            this.sessionType = "SPECIAL";
+            this.activityType = activityType;
+            this.aliases = aliases != null ? aliases : Collections.emptyList();
+        }
+
+        public String getCode() { return code; }
+        public String getTitle() { return title; }
+        public String getDay() { return day; }
+        public int getStartPeriod() { return startPeriod; }
+        public int getPeriodCount() { return periodCount; }
+        public String getSessionType() { return sessionType; }
+        public String getActivityType() { return activityType; }
+        public List<String> getAliases() { return aliases; }
+
+        public boolean matchesCode(String subjectCode) {
+            if (subjectCode == null) return false;
+            String clean = subjectCode.trim();
+            if (code.equalsIgnoreCase(clean)) return true;
+            for (String alias : aliases) {
+                if (alias.equalsIgnoreCase(clean)) return true;
+            }
+            return false;
+        }
+    }
+
+    public List<SpecialActivityDefinition> getSpecialActivitiesConfig() {
+        return List.of(
+                new SpecialActivityDefinition("2321APT301", "Aptitude Test", "Tuesday", 1, 1, "APTITUDE", List.of("APTITUDE", "AT", "2321APT301")),
+                new SpecialActivityDefinition("2321TEC301", "Technical Test", "Thursday", 1, 1, "TECHNICAL_TEST", List.of("TECHNICAL_TEST", "TT", "2321TEC301")),
+                new SpecialActivityDefinition("2321LEE301", "Leet Code", "Monday", 7, 1, "LEETCODE", List.of("LEETCODE", "LC", "2321LEE301")),
+                new SpecialActivityDefinition("2321COU301", "Counselling", "Monday", 8, 1, "COUNSELLING", List.of("COUNSELLING", "COUN", "2321COU301")),
+                new SpecialActivityDefinition("2321NPT301", "Nptel", "Wednesday", 6, 1, "NPTEL", List.of("NPTEL", "2321NPT301")),
+                new SpecialActivityDefinition("2321SDA301L", "Career Skill Development", "Friday", 4, 2, "CAREER_SKILL_DEVELOPMENT",
+                        List.of("2321CSD301", "2321SDA301", "CSD", "CAREER_SKILL_DEVELOPMENT", "2321SDA301L"))
+        );
+    }
+
+    public Set<String> getSpecialFixedSlotCodes() {
+        Set<String> codes = new HashSet<>();
+        for (SpecialActivityDefinition def : getSpecialActivitiesConfig()) {
+            codes.add(def.getCode().toUpperCase());
+            for (String alias : def.getAliases()) {
+                codes.add(alias.toUpperCase());
+            }
+        }
+        return codes;
+    }
+
+    private boolean isSpecialFixedSlot(Subject subject) {
+        if (subject == null) return false;
+        String code = subject.getSubjectCode() != null ? subject.getSubjectCode().toUpperCase().trim() : "";
+        String name = subject.getSubjectName() != null ? subject.getSubjectName().toUpperCase().trim() : "";
+        for (SpecialActivityDefinition def : getSpecialActivitiesConfig()) {
+            if (def.matchesCode(code) || (name.contains(def.getTitle().toUpperCase()))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // --- Public API ---
 
     @Async("solverExecutor")
@@ -179,23 +255,23 @@ public class TimetableSolverService {
         Map<Long, Integer> requiredAcademicHoursPerBatch = new HashMap<>();
         Map<Long, Integer> facultyDemandLoadMap = new HashMap<>();
 
-        // Pre-populate with explicit assignments
+        // Pre-populate with explicit assignments (excluding special fixed slots)
         for (SubjectOffering o : offerings) {
-            if (o.getAssignedFaculty() != null && o.getSubject() != null) {
+            if (o.getAssignedFaculty() != null && o.getSubject() != null && !isSpecialFixedSlot(o.getSubject())) {
                 int p = calculateSubjectPeriods(o.getSubject());
                 facultyDemandLoadMap.merge(o.getAssignedFaculty().getId(), p, Integer::sum);
             }
         }
 
         // Subject codes handled by reserveCommonTestSlots (fixed time slots)
-        Set<String> specialFixedSlotCodes = Set.of("2321APT301", "2321TEC301", "2321LEE301", "2321COU301", "2321NPT301");
+        Set<String> specialFixedSlotCodes = getSpecialFixedSlotCodes();
 
         for (SubjectOffering offering : offerings) {
             Subject subject = offering.getSubject();
             Batch batch = offering.getBatch();
 
-            // Skip subjects that have fixed special slots (AT=Tue P1, TT=Thu P1)
-            if (specialFixedSlotCodes.contains(subject.getSubjectCode())) {
+            // Skip subjects that have fixed special slots (AT, TT, LC, COUN, NPTEL, CSD)
+            if (isSpecialFixedSlot(subject)) {
                 log.debug("Skipping {} from regular demand - handled by reserveCommonTestSlots", subject.getSubjectCode());
                 continue;
             }
@@ -358,6 +434,15 @@ public class TimetableSolverService {
                 .thenComparing(r -> r.getRoomCode() != null ? r.getRoomCode() : ""));
 
         Set<Long> assignedHomeRoomIds = new HashSet<>();
+        // Respect dedicated rooms already assigned to other batches (outside targetBatches)
+        for (Batch ob : allBatches) {
+            if (!targetBatchIds.contains(ob.getId()) && ob.getAssignedRoomCode() != null && !ob.getAssignedRoomCode().trim().isEmpty()) {
+                sortedLectureRooms.stream()
+                        .filter(r -> r.getRoomCode().equalsIgnoreCase(ob.getAssignedRoomCode().trim()))
+                        .findFirst()
+                        .ifPresent(r -> assignedHomeRoomIds.add(r.getId()));
+            }
+        }
         for (Batch batch : targetBatches) {
             Room home = null;
 
@@ -466,6 +551,20 @@ public class TimetableSolverService {
             return;
         }
 
+        // 10b. Strict 40-period check per section: exactly 40 filled periods required (never pad)
+        for (Batch b : targetBatches) {
+            long count = entries.stream()
+                    .filter(e -> e.getBatchId() != null && e.getBatchId().equals(b.getId()))
+                    .count();
+            if (count != 40L) {
+                infeasibleReasons.add("Section [" + b.getBatchName() + "] shortfall: " + (40 - count) + " periods");
+            }
+        }
+        if (!infeasibleReasons.isEmpty()) {
+            updateJobStatus(jobId, "INFEASIBLE", "Scheduling Infeasible: " + String.join(" | ", infeasibleReasons));
+            return;
+        }
+
         // 11. Dual persistence: Save TimetableEntry & TimetableAssignment
         for (TimetableEntry entry : entries) {
             entry.setJobId(jobId);
@@ -519,76 +618,89 @@ public class TimetableSolverService {
                                         Set<String> facultyUnavailableSet,
                                         Map<Long, Room> batchHomeRoomMap) {
 
-        // Institutional synchronized activity slots matching Easwari Reference Timetable:
-        // AT (Aptitude Test) -> Tuesday Period 1
-        // TT (Technical Test) -> Thursday Period 1
-        // LC (LeetCode) -> Monday Period 7
-        // COUN (Counselling) -> Monday Period 8
-        // NPTEL -> Wednesday Period 6
-        record CommonTest(String code, String day, int period, String title) {}
-        List<CommonTest> tests = List.of(
-                new CommonTest("2321APT301", "Tuesday", 1, "Aptitude Test"),
-                new CommonTest("2321TEC301", "Thursday", 1, "Technical Test"),
-                new CommonTest("2321LEE301", "Monday", 7, "Leet Code"),
-                new CommonTest("2321COU301", "Monday", 8, "Counselling"),
-                new CommonTest("2321NPT301", "Wednesday", 6, "Nptel")
-        );
+        List<SpecialActivityDefinition> activityConfigs = getSpecialActivitiesConfig();
 
-        for (CommonTest test : tests) {
-            Slot targetSlot = slots.stream()
-                    .filter(s -> s.dayOfWeek.equalsIgnoreCase(test.day) && s.periodNumber == test.period)
-                    .findFirst()
-                    .orElse(null);
+        for (SpecialActivityDefinition def : activityConfigs) {
+            List<Slot> targetSlots = new ArrayList<>();
+            for (int p = 0; p < def.getPeriodCount(); p++) {
+                final int periodNum = def.getStartPeriod() + p;
+                Slot targetSlot = slots.stream()
+                        .filter(s -> s.dayOfWeek.equalsIgnoreCase(def.getDay()) && s.periodNumber == periodNum)
+                        .findFirst()
+                        .orElse(null);
+                if (targetSlot != null) {
+                    targetSlots.add(targetSlot);
+                }
+            }
 
-            if (targetSlot == null) {
-                log.warn("Common test slot {} {} P{} not found", test.code, test.day, test.period);
+            if (targetSlots.size() < def.getPeriodCount()) {
+                log.warn("Special activity {} {} P{} not all slots found", def.getCode(), def.getDay(), def.getStartPeriod());
                 continue;
             }
 
-            SlotKey key = new SlotKey(targetSlot.dayOfWeek, targetSlot.periodNumber);
-            Subject specSub = subjectRepository.findBySubjectCode(test.code)
-                    .orElseGet(() -> subjectRepository.save(Subject.builder()
-                            .subjectCode(test.code)
-                            .subjectName(test.title)
-                            .department("General")
-                            .subjectType("SPECIAL")
-                            .requiresLab(false)
-                            .active(true)
-                            .build()));
+            Subject specSub = subjectRepository.findBySubjectCode(def.getCode()).orElse(null);
+            if (specSub == null) {
+                for (String alias : def.getAliases()) {
+                    specSub = subjectRepository.findBySubjectCode(alias).orElse(null);
+                    if (specSub != null) break;
+                }
+            }
+            if (specSub == null) {
+                specSub = subjectRepository.save(Subject.builder()
+                        .subjectCode(def.getCode())
+                        .subjectName(def.getTitle())
+                        .department("General")
+                        .subjectType("SPECIAL")
+                        .requiresLab(false)
+                        .active(true)
+                        .build());
+            }
 
             for (Batch batch : batches) {
+                // AT, TT, LC, COUN, NPTEL and CSD are ALL held in the section's home classroom. Never use a LAB room.
                 Room homeRoom = batchHomeRoomMap != null ? batchHomeRoomMap.get(batch.getId()) : null;
-                Room room = homeRoom != null ? homeRoom : (!lectureRooms.isEmpty() ? lectureRooms.get(0) : null);
+                Room room = (homeRoom != null && !isLabRoom(homeRoom.getRoomType())) ? homeRoom : null;
+                if (room == null) {
+                    room = lectureRooms.stream()
+                            .filter(r -> !isLabRoom(r.getRoomType()))
+                            .findFirst()
+                            .orElse(null);
+                }
 
                 Faculty fac = null;
                 // Check if an offering already assigned a specific faculty member for this subject and batch
+                final SpecialActivityDefinition currentDef = def;
                 SubjectOffering offeringMatch = offeringRepository.findByActiveTrue().stream()
                         .filter(o -> o.getBatch() != null && o.getBatch().getId().equals(batch.getId())
-                                && o.getSubject() != null && o.getSubject().getSubjectCode().equalsIgnoreCase(test.code))
+                                && o.getSubject() != null && currentDef.matchesCode(o.getSubject().getSubjectCode()))
                         .findFirst().orElse(null);
 
                 if (offeringMatch != null && offeringMatch.getAssignedFaculty() != null) {
                     Faculty assigned = offeringMatch.getAssignedFaculty();
-                    String unavKey = assigned.getId() + "@" + targetSlot.dayOfWeek.toUpperCase() + "-P" + targetSlot.periodNumber;
-                    if (!facultyUnavailableSet.contains(unavKey) && !facultySlotMap.getOrDefault(key, Set.of()).contains(assigned.getId())) {
+                    boolean allAvail = targetSlots.stream().allMatch(slot -> {
+                        String unavKey = assigned.getId() + "@" + slot.dayOfWeek.toUpperCase() + "-P" + slot.periodNumber;
+                        SlotKey key = new SlotKey(slot.dayOfWeek, slot.periodNumber);
+                        return !facultyUnavailableSet.contains(unavKey) && !facultySlotMap.getOrDefault(key, Set.of()).contains(assigned.getId());
+                    });
+                    if (allAvail) {
                         fac = assigned;
                     }
                 }
                 if (fac == null) {
-                    fac = findFacultyForSpecialActivity(test.code, batch, targetSlot, facultyList,
-                            facultySlotMap, facultyDailyLoadMap, facultyUnavailableSet, key);
+                    fac = findFacultyForSpecialActivity(def.getActivityType(), batch, targetSlots, facultyList,
+                            facultySlotMap, facultyDailyLoadMap, facultyUnavailableSet);
                 }
 
-                Demand specDemand = new Demand(null, batch, specSub, fac, "SPECIAL", test.code, 1);
-                entries.add(buildEntry(specDemand, targetSlot, room));
+                Demand specDemand = new Demand(null, batch, specSub, fac, "SPECIAL", def.getActivityType(), def.getPeriodCount());
 
-                if (room != null && fac != null) {
-                    assignments.add(buildAssignment(specDemand, targetSlot, room, 1, false));
-                    markSlotUsed(targetSlot, batch.getId(), fac.getId(), room.getId(),
+                for (Slot targetSlot : targetSlots) {
+                    entries.add(buildEntry(specDemand, targetSlot, room));
+                    markSlotUsed(targetSlot, batch.getId(), fac != null ? fac.getId() : null, room != null ? room.getId() : null,
                             batchSlotMap, facultySlotMap, roomSlotMap, facultyLoadMap, facultyDailyLoadMap, false);
-                } else if (room != null) {
-                    markSlotUsed(targetSlot, batch.getId(), null, room.getId(),
-                            batchSlotMap, facultySlotMap, roomSlotMap, facultyLoadMap, facultyDailyLoadMap, false);
+                }
+
+                if (room != null) {
+                    assignments.add(buildAssignment(specDemand, targetSlots.get(0), room, def.getPeriodCount(), false));
                 }
             }
         }
@@ -707,38 +819,56 @@ public class TimetableSolverService {
                                    Set<String> facultyUnavailableSet,
                                    Room homeRoom) {
 
-        int labDuration = demand.subject.getLabDuration() != null ? demand.subject.getLabDuration() : 2;
+        int labDuration = demand.subject.getLabDuration() != null ? demand.subject.getLabDuration() : (demand.periodsNeeded == 3 ? 3 : 2);
         int totalLabPeriods = demand.periodsNeeded;
         int sessionsNeeded = (int) Math.ceil((double) totalLabPeriods / labDuration);
         int sessionsPlaced = 0;
 
-        // Window preference order: prioritize afternoon {7, 8}, {6, 7}, then mid-day {4, 5}, {3, 4}
-        // Continuous, never crossing morning break (P2-P3) or lunch (P5-P6)
-        int[][] windows = { {7, 8}, {6, 7}, {4, 5}, {3, 4}, {1, 2} };
+        // Allowed windows: P1-2, P3-4, P4-5, P3-5, P6-7, P7-8, P6-8.
+        // Use 3-period windows only when labDuration is 3. Never cross morning break (after P2) or lunch (after P5).
+        // Afternoon windows preferred.
+        int[][] windows;
+        if (labDuration == 3) {
+            windows = new int[][] { {6, 7, 8}, {3, 4, 5} };
+        } else {
+            // Default 2-period windows
+            windows = new int[][] { {7, 8}, {6, 7}, {4, 5}, {3, 4}, {1, 2} };
+        }
 
         // Stagger lab blocks across sections: rotate the day order per section
         List<String> dayKeys = new ArrayList<>(slotsByDay.keySet());
         dayKeys.sort(Comparator.comparingInt(this::dayOrder));
-        int batchOffset = (int)(demand.batch.getId() % Math.max(dayKeys.size(), 1));
+        int batchOffset = (int) ((demand.batch.getId() * 2 + (demand.subject.getId() != null ? demand.subject.getId() : 0)) % Math.max(dayKeys.size(), 1));
         Collections.rotate(dayKeys, batchOffset);
 
         // Also rotate which window is tried first per section & subject
-        int windowOffset = (int)((demand.batch.getId() + (demand.subject.getId() != null ? demand.subject.getId() : 0)) % windows.length);
+        int windowOffset = (int) ((demand.batch.getId() + (demand.subject.getId() != null ? demand.subject.getId() : 0)) % windows.length);
 
         for (String day : dayKeys) {
             if (sessionsPlaced >= sessionsNeeded) break;
+
+            // Enforce: At most ONE lab block per section per day
+            boolean sectionHasLabOnDay = entries.stream().anyMatch(e ->
+                    Objects.equals(e.getBatchId(), demand.batch.getId()) &&
+                    e.getDayOfWeek().equalsIgnoreCase(day) &&
+                    "LAB".equalsIgnoreCase(e.getSessionType())
+            );
+            if (sectionHasLabOnDay) {
+                continue;
+            }
 
             List<Slot> daySlots = slotsByDay.get(day);
             if (daySlots == null || daySlots.isEmpty()) continue;
             Map<Integer, Slot> periodToSlot = daySlots.stream()
                     .collect(Collectors.toMap(s -> s.periodNumber, s -> s));
 
+            boolean placedOnThisDay = false;
             for (int wi = 0; wi < windows.length; wi++) {
-                if (sessionsPlaced >= sessionsNeeded) break;
+                if (placedOnThisDay || sessionsPlaced >= sessionsNeeded) break;
                 int[] window = windows[(wi + windowOffset) % windows.length];
 
                 for (int startIdx = 0; startIdx <= window.length - labDuration; startIdx++) {
-                    if (sessionsPlaced >= sessionsNeeded) break;
+                    if (placedOnThisDay || sessionsPlaced >= sessionsNeeded) break;
 
                     List<Slot> blockSlots = new ArrayList<>();
                     boolean blockValid = true;
@@ -795,6 +925,8 @@ public class TimetableSolverService {
                     assignments.add(buildAssignment(demand, firstSlot, labRoom, labDuration, true));
 
                     sessionsPlaced++;
+                    placedOnThisDay = true;
+                    break;
                 }
             }
         }
@@ -829,14 +961,17 @@ public class TimetableSolverService {
     }
 
     /**
-     * Find an available faculty member for a special activity in a given slot.
+     * Find an available faculty member for a special activity across target slots.
      */
-    private Faculty findFacultyForSpecialActivity(String activity, Batch batch, Slot slot,
+    private Faculty findFacultyForSpecialActivity(String activity, Batch batch, List<Slot> targetSlots,
                                                    List<Faculty> facultyList,
                                                    Map<SlotKey, Set<Long>> facultySlotMap,
                                                    Map<String, Integer> facultyDailyLoadMap,
-                                                   Set<String> facultyUnavailableSet,
-                                                   SlotKey key) {
+                                                   Set<String> facultyUnavailableSet) {
+        if (targetSlots == null || targetSlots.isEmpty()) return null;
+        Slot firstSlot = targetSlots.get(0);
+        String day = firstSlot.dayOfWeek.toUpperCase();
+
         // Special Test Allocation for Semesters 3-8: Aptitude & Technical Tests must only be
         // assigned to faculty from the batch's main department, excluding supporting departments.
         boolean isSpecialTestSem3To8 = (batch.getSemester() != null && batch.getSemester() >= 3 && batch.getSemester() <= 8)
@@ -861,25 +996,53 @@ public class TimetableSolverService {
         }
 
         for (Faculty candidate : candidatePool) {
-            String unavKey = candidate.getId() + "@" + slot.dayOfWeek.toUpperCase() + "-P" + slot.periodNumber;
-            if (!facultyUnavailableSet.contains(unavKey) && !facultySlotMap.getOrDefault(key, Set.of()).contains(candidate.getId())) {
-                int dailyLoad = facultyDailyLoadMap.getOrDefault(candidate.getId() + "@" + slot.dayOfWeek.toUpperCase(), 0);
-                if (dailyLoad < 6) {
+            boolean availableForAll = targetSlots.stream().allMatch(slot -> {
+                String unavKey = candidate.getId() + "@" + day + "-P" + slot.periodNumber;
+                SlotKey key = new SlotKey(slot.dayOfWeek, slot.periodNumber);
+                return !facultyUnavailableSet.contains(unavKey) && !facultySlotMap.getOrDefault(key, Set.of()).contains(candidate.getId());
+            });
+            if (availableForAll) {
+                int dailyLoad = facultyDailyLoadMap.getOrDefault(candidate.getId() + "@" + day, 0);
+                if (dailyLoad + targetSlots.size() <= 6) {
                     return candidate;
                 }
             }
         }
         // Fallback: try any non-HOD faculty
-        for (Faculty candidate : facultyList) {
-            String unavKey = candidate.getId() + "@" + slot.dayOfWeek.toUpperCase() + "-P" + slot.periodNumber;
-            if (!facultyUnavailableSet.contains(unavKey) && !facultySlotMap.getOrDefault(key, Set.of()).contains(candidate.getId())) {
-                int dailyLoad = facultyDailyLoadMap.getOrDefault(candidate.getId() + "@" + slot.dayOfWeek.toUpperCase(), 0);
-                if (dailyLoad < 6) {
+        for (Faculty candidate : facultyList.stream().filter(c -> !c.isHod()).collect(Collectors.toList())) {
+            boolean availableForAll = targetSlots.stream().allMatch(slot -> {
+                String unavKey = candidate.getId() + "@" + day + "-P" + slot.periodNumber;
+                SlotKey key = new SlotKey(slot.dayOfWeek, slot.periodNumber);
+                return !facultyUnavailableSet.contains(unavKey) && !facultySlotMap.getOrDefault(key, Set.of()).contains(candidate.getId());
+            });
+            if (availableForAll) {
+                int dailyLoad = facultyDailyLoadMap.getOrDefault(candidate.getId() + "@" + day, 0);
+                if (dailyLoad + targetSlots.size() <= 6) {
                     return candidate;
                 }
             }
         }
-        return null;
+        // Final fallback: candidate pool without strict daily load limit
+        for (Faculty candidate : candidatePool) {
+            boolean availableForAll = targetSlots.stream().allMatch(slot -> {
+                String unavKey = candidate.getId() + "@" + day + "-P" + slot.periodNumber;
+                SlotKey key = new SlotKey(slot.dayOfWeek, slot.periodNumber);
+                return !facultyUnavailableSet.contains(unavKey) && !facultySlotMap.getOrDefault(key, Set.of()).contains(candidate.getId());
+            });
+            if (availableForAll) {
+                return candidate;
+            }
+        }
+        return candidatePool.isEmpty() ? null : candidatePool.get(0);
+    }
+
+    private Faculty findFacultyForSpecialActivity(String activity, Batch batch, Slot slot,
+                                                   List<Faculty> facultyList,
+                                                   Map<SlotKey, Set<Long>> facultySlotMap,
+                                                   Map<String, Integer> facultyDailyLoadMap,
+                                                   Set<String> facultyUnavailableSet,
+                                                   SlotKey key) {
+        return findFacultyForSpecialActivity(activity, batch, List.of(slot), facultyList, facultySlotMap, facultyDailyLoadMap, facultyUnavailableSet);
     }
 
     private String formatActivityTitle(String code) {
