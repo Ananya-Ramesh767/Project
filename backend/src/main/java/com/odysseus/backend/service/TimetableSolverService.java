@@ -8,6 +8,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -44,6 +47,7 @@ public class TimetableSolverService {
     private final SubjectRepository subjectRepository;
     private final TimetableValidationService validationService;
     private final RoomAllocationService roomAllocationService;
+    private final PlatformTransactionManager txManager;
 
     // --- Inner classes for solver bookkeeping ---
 
@@ -92,19 +96,17 @@ public class TimetableSolverService {
     // --- Public API ---
 
     @Async("solverExecutor")
-    @Transactional
     public void solveAsync(String jobId, String department, Integer semester) {
         try {
             updateJobStatus(jobId, "SOLVING", "Solver started. Constructing constraint graph and problem model...");
-            solve(jobId, department, semester);
+            new TransactionTemplate(txManager).executeWithoutResult(s -> solve(jobId, department, semester));
         } catch (Exception e) {
             log.error("Solver encountered fatal error for job {}", jobId, e);
-            updateJobStatus(jobId, "FAILED", "Solver error: " + e.getMessage());
+            updateJobStatus(jobId, "FAILED", "Solver error: " + e);
         }
     }
 
     @Async("solverExecutor")
-    @Transactional
     public void solveAsync(String jobId) {
         solveAsync(jobId, null, null);
     }
@@ -127,6 +129,8 @@ public class TimetableSolverService {
         if (targetBatches.isEmpty()) {
             targetBatches = allBatches;
         }
+        targetBatches = new ArrayList<>(targetBatches.stream()
+                .collect(Collectors.toMap(Batch::getId, b -> b, (a, b) -> a, LinkedHashMap::new)).values());
         Set<Long> targetBatchIds = targetBatches.stream().map(Batch::getId).collect(Collectors.toSet());
 
         List<SubjectOffering> allOfferings = offeringRepository.findByActiveTrue();
@@ -472,6 +476,7 @@ public class TimetableSolverService {
         for (Batch b : targetBatches) {
             assignmentRepository.deleteByBatchId(b.getId());
         }
+        assignmentRepository.flush();
         assignmentRepository.saveAll(assignments);
 
         // 11b. Persist dedicated classroom allocations for batches now that timetable has been saved
@@ -1016,14 +1021,18 @@ public class TimetableSolverService {
     }
 
     private void updateJobStatus(String jobId, String status, String message) {
-        jobRepository.findById(jobId).ifPresent(job -> {
+        String msg = message != null && message.length() > 1000 ? message.substring(0, 1000) : message;
+        if (message != null && message.length() > 1000) log.warn("Job {} full message: {}", jobId, message);
+        TransactionTemplate tt = new TransactionTemplate(txManager);
+        tt.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        tt.executeWithoutResult(s -> jobRepository.findById(jobId).ifPresent(job -> {
             job.setStatus(status);
-            job.setMessage(message);
+            job.setMessage(msg);
             if ("COMPLETED".equals(status) || "FAILED".equals(status) || "INFEASIBLE".equals(status)) {
                 job.setCompletedAt(LocalDateTime.now());
             }
             jobRepository.save(job);
-        });
+        }));
     }
 
     private int calculateSubjectPeriods(Subject subject) {
