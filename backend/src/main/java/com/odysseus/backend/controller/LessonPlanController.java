@@ -32,6 +32,53 @@ public class LessonPlanController {
     private final UserRepository userRepository;
     private final FacultyRepository facultyRepository;
 
+    private static String normalizeEmail(String email) {
+        if (email == null) return "";
+        return email.trim().toLowerCase().replaceAll("\\.+", ".").replaceAll("\\.@|@\\.", "@");
+    }
+
+    private static String cleanName(String name) {
+        if (name == null) return "";
+        return name.toLowerCase()
+                .replaceAll("\\b(dr|mr|mrs|ms|prof|asst|assoc)\\b", "")
+                .replaceAll("[^a-z0-9]", "");
+    }
+
+    private boolean isUserAuthorizedForOffering(SubjectOffering offering) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null) return false;
+        boolean isAdmin = auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"));
+        if (isAdmin) return true;
+
+        String username = auth.getName();
+        User user = userRepository.findByUsername(username)
+                .or(() -> userRepository.findByEmail(username))
+                .orElse(null);
+        if (user == null) return false;
+
+        Faculty assigned = offering.getAssignedFaculty();
+        if (assigned == null) return false;
+
+        String uEmail = user.getEmail() != null ? user.getEmail() : "";
+        String fEmail = assigned.getEmail() != null ? assigned.getEmail() : "";
+
+        // 1. Raw match
+        if (!uEmail.isBlank() && !fEmail.isBlank() && uEmail.equalsIgnoreCase(fEmail)) return true;
+
+        // 2. Normalized email match
+        if (!uEmail.isBlank() && !fEmail.isBlank() && normalizeEmail(uEmail).equals(normalizeEmail(fEmail))) return true;
+
+        // 3. Name match
+        String uClean = cleanName(user.getFullName() != null ? user.getFullName() : user.getUsername());
+        String fClean = cleanName(assigned.getName());
+        if (!uClean.isBlank() && !fClean.isBlank() && (uClean.equals(fClean) || uClean.contains(fClean) || fClean.contains(uClean))) return true;
+
+        // 4. Employee ID match
+        if (assigned.getEmployeeId() != null && assigned.getEmployeeId().equalsIgnoreCase(user.getUsername())) return true;
+
+        return false;
+    }
+
     @PostMapping("/generate")
     public ResponseEntity<?> generate(@RequestParam Long subjectOfferingId,
                                        @RequestParam Long academicCalendarId,
@@ -39,6 +86,10 @@ public class LessonPlanController {
         SubjectOffering offering = subjectOfferingRepository.findById(subjectOfferingId).orElse(null);
         if (offering == null) {
             return ResponseEntity.notFound().build();
+        }
+        if (!isUserAuthorizedForOffering(offering)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "Access denied: You are not assigned to this subject offering."));
         }
         AcademicCalendar calendar = academicCalendarRepository.findById(academicCalendarId).orElse(null);
         if (calendar == null) {

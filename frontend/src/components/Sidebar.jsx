@@ -47,7 +47,7 @@ export default function Sidebar({ user, onLogout }) {
             <NavItem to="/faculty"    icon={Users}>Faculty Master</NavItem>
             <NavItem to="/rooms"      icon={DoorOpen}>Room Master</NavItem>
             <NavItem to="/batches"    icon={Layers}>Batches &amp; Sections</NavItem>
-            <NavItem to="/offerings" icon={BookMarked}>Subject Offerings</NavItem>
+            <NavItem to="/offerings"  icon={BookMarked}>Subject Offerings</NavItem>
             <NavItem to="/calendar"   icon={Calendar}>Year Calendar</NavItem>
             <NavItem to="/timeslots"  icon={Clock}>Timeslots</NavItem>
 
@@ -55,21 +55,20 @@ export default function Sidebar({ user, onLogout }) {
             <NavItem to="/readiness"  icon={ShieldCheck}>Data Readiness</NavItem>
             <NavItem to="/generate"   icon={PlayCircle}>Generate Timetable</NavItem>
             <NavItem to="/timetable"  icon={Table}>View Timetables</NavItem>
-            <NavItem to="/faculty-portal" icon={UserCheck}>Faculty Portal</NavItem>
 
-            <div className="nav-section-title">Lesson Planning</div>
-            <NavItem to="/syllabus"     icon={ListChecks}>Syllabus Management</NavItem>
-            <NavItem to="/lesson-plan"  icon={CalendarClock}>Lesson Plans</NavItem>
+            <div className="nav-section-title">Academic Delivery</div>
+            <NavItem to="/syllabus"    icon={ListChecks}>Syllabus Management</NavItem>
+            <NavItem to="/lesson-plan" icon={CalendarClock}>Lesson Plans</NavItem>
           </>
         )}
 
         {!isAdmin && (
           <>
-            <div className="nav-section-title">My Workspace</div>
+            <div className="nav-section-title">Faculty Workspace</div>
             <NavItem to="/faculty-portal"  icon={UserCheck}>Faculty Dashboard</NavItem>
-            <NavItem to="/timetable"       icon={Table}>Section Timetables</NavItem>
-            <NavItem to="/my-lesson-plans" icon={BookMarked}>My Lesson Plans</NavItem>
-            <NavItem to="/lesson-plan"     icon={CalendarClock}>Lesson Plan View</NavItem>
+            <NavItem to="/timetable"       icon={Table}>My Timetable</NavItem>
+            <NavItem to="/syllabus"        icon={ListChecks}>Syllabus Management</NavItem>
+            <NavItem to="/lesson-plan"     icon={CalendarClock}>Lesson Plans</NavItem>
             <NavItem to="/calendar"        icon={Calendar}>Year Calendar</NavItem>
           </>
         )}
@@ -85,6 +84,11 @@ export default function Sidebar({ user, onLogout }) {
           <div style={{ fontSize: '0.7rem', color: 'var(--accent-secondary)', fontWeight: 700, letterSpacing: '0.04em', marginTop: '0.15rem' }}>
             {roleLabel}
           </div>
+          {user?.department && (
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.2rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={user.department}>
+              🏛️ {user.department}
+            </div>
+          )}
         </div>
         <button onClick={handleLogout} className="btn btn-secondary" style={{ width: '100%', justifyContent: 'center' }}>
           <LogOut size={15} /> Sign Out

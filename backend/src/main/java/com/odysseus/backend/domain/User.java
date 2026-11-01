@@ -31,6 +31,10 @@ public class User {
 
     private String fullName;
 
+    private String department; // Faculty department (null for admins)
+
+    private String phone;
+
     @Builder.Default
     private boolean active = true;
 

@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { INSTITUTIONAL_PROGRAMMES } from '../utils/programmes';
+import { getStoredAcademicContext, setStoredAcademicContext } from '../utils/academicContext';
 
 export default function DataReadinessPage({ user }) {
   const [readiness, setReadiness] = useState(null);
@@ -12,15 +13,29 @@ export default function DataReadinessPage({ user }) {
 
   // Scope selectors — persisted to localStorage so they stay consistent across pages
   const [department, setDepartment] = useState(
-    () => localStorage.getItem('academicContext_dept') || ''
+    () => getStoredAcademicContext().department || ''
   );
   const [semester, setSemester] = useState(
-    () => localStorage.getItem('academicContext_semester') || ''
+    () => getStoredAcademicContext().semester || ''
   );
   const [academicYear] = useState('2026-2027');
 
-  // Auto-run on mount
-  useEffect(() => { runCheck(); }, []);
+  useEffect(() => {
+    const handleContextChange = (e) => {
+      const ctx = e.detail || getStoredAcademicContext();
+      setDepartment(ctx.department || '');
+      setSemester(ctx.semester || '');
+    };
+    window.addEventListener('academicContextChanged', handleContextChange);
+    window.addEventListener('storage', handleContextChange);
+    return () => {
+      window.removeEventListener('academicContextChanged', handleContextChange);
+      window.removeEventListener('storage', handleContextChange);
+    };
+  }, []);
+
+  // Auto-run on mount or scope change
+  useEffect(() => { runCheck(); }, [department, semester]);
 
   const runCheck = async () => {
     setLoading(true);
@@ -43,11 +58,11 @@ export default function DataReadinessPage({ user }) {
 
   const handleDeptChange = (val) => {
     setDepartment(val);
-    localStorage.setItem('academicContext_dept', val);
+    setStoredAcademicContext(val, semester);
   };
   const handleSemChange = (val) => {
     setSemester(val);
-    localStorage.setItem('academicContext_semester', val);
+    setStoredAcademicContext(department, val);
   };
 
   const blockingCount = readiness?.blockingIssues?.length ?? 0;

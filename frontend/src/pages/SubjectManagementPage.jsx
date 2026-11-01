@@ -16,6 +16,20 @@ export default function SubjectManagementPage({ user }) {
   const [filterSemester, setFilterSemester] = useState(() => initialContext.semester || '');
   const [filterDept, setFilterDept] = useState(() => initialContext.department || '');
 
+  useEffect(() => {
+    const handleContextChange = (e) => {
+      const ctx = e.detail || getStoredAcademicContext();
+      setFilterDept(ctx.department || '');
+      setFilterSemester(ctx.semester || '');
+    };
+    window.addEventListener('academicContextChanged', handleContextChange);
+    window.addEventListener('storage', handleContextChange);
+    return () => {
+      window.removeEventListener('academicContextChanged', handleContextChange);
+      window.removeEventListener('storage', handleContextChange);
+    };
+  }, []);
+
   // Document Upload & Preview
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadFile, setUploadFile] = useState(null);
@@ -329,12 +343,12 @@ export default function SubjectManagementPage({ user }) {
 
   const handleDeptFilter = (dept) => {
     setFilterDept(dept);
-    if (dept && dept !== 'ALL') setStoredAcademicContext({ department: dept });
+    if (dept && dept !== 'ALL') setStoredAcademicContext(dept, filterSemester);
   };
 
   const handleSemesterFilter = (sem) => {
     setFilterSemester(sem);
-    if (sem && sem !== 'ALL') setStoredAcademicContext({ semester: sem });
+    if (sem && sem !== 'ALL') setStoredAcademicContext(filterDept, sem);
   };
 
   return (

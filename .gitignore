@@ -8,3 +8,13 @@ target/
 *.mv.db
 *.trace.db
 backend/data/*.db
+
+# Local scratch / debug scripts
+scratch_*
+
+# Backups and DB dumps (contain real data)
+*.bak*
+backend/data/**/*.zip
+
+# Stray root lockfile (frontend/package-lock.json stays tracked)
+/package-lock.json

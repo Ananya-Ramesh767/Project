@@ -1,37 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { PlayCircle, AlertCircle, CheckCircle2, Loader, FileCode, Clock, XCircle, Calendar, ArrowRight, Filter, ShieldCheck, ShieldAlert, FlaskConical, Users, BookOpen, Building2, Download, CheckSquare } from 'lucide-react';
+import { PlayCircle, AlertCircle, CheckCircle2, Loader, FileCode, Clock, XCircle, ArrowRight, Filter, ShieldCheck, ShieldAlert, Users, BookOpen, Building2 } from 'lucide-react';
 import { INSTITUTIONAL_PROGRAMMES } from '../utils/programmes';
 import { SEMESTER_OPTIONS, getStoredAcademicContext, setStoredAcademicContext } from '../utils/academicContext';
-
-const DAYS_ORDER = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY'];
-const PERIODS = [1, 2, 3, 4, 5, 6, 7, 8];
-
-// Color palette for subjects
-const SUBJECT_COLORS = [
-  { bg: 'rgba(99, 102, 241, 0.25)', border: '#818cf8', text: '#a5b4fc' },
-  { bg: 'rgba(16, 185, 129, 0.25)', border: '#34d399', text: '#6ee7b7' },
-  { bg: 'rgba(245, 158, 11, 0.25)', border: '#fbbf24', text: '#fcd34d' },
-  { bg: 'rgba(239, 68, 68, 0.25)',  border: '#f87171', text: '#fca5a5' },
-  { bg: 'rgba(139, 92, 246, 0.25)', border: '#a78bfa', text: '#c4b5fd' },
-  { bg: 'rgba(6, 182, 212, 0.25)',  border: '#22d3ee', text: '#67e8f9' },
-  { bg: 'rgba(236, 72, 153, 0.25)', border: '#f472b6', text: '#f9a8d4' },
-  { bg: 'rgba(34, 197, 94, 0.25)',  border: '#4ade80', text: '#86efac' },
-];
-
-function getSubjectColor(subjectId, colorMap) {
-  if (!colorMap.current[subjectId]) {
-    const idx = Object.keys(colorMap.current).length % SUBJECT_COLORS.length;
-    colorMap.current[subjectId] = SUBJECT_COLORS[idx];
-  }
-  return colorMap.current[subjectId];
-}
 
 export default function GenerateTimetablePage({ user }) {
   const navigate = useNavigate();
   const [jobId, setJobId] = useState(null);
   const [jobStatus, setJobStatus] = useState(null);
-  const [timetable, setTimetable] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showContractModal, setShowContractModal] = useState(false);
@@ -39,23 +15,25 @@ export default function GenerateTimetablePage({ user }) {
   const [readiness, setReadiness] = useState(null);
   const [readinessLoading, setReadinessLoading] = useState(false);
   const pollingRef = useRef(null);
-  const subjectColorMap = useRef({});
 
   // Scope selectors — synced with global academic context
   const initialContext = getStoredAcademicContext();
   const [department, setDepartment] = useState(() => initialContext.department || '');
   const [semester, setSemester] = useState(() => initialContext.semester || '');
 
-  // Admin validation checklist
-  const [checklist, setChecklist] = useState({
-    facultyClash: true,
-    roomClash: true,
-    hodExclusion: true,
-    maxCapacity: true,
-    floorCoherence: true
-  });
-  const [timetableConfirmed, setTimetableConfirmed] = useState(false);
-  const [confirmMsg, setConfirmMsg] = useState('');
+  useEffect(() => {
+    const handleContextChange = (e) => {
+      const ctx = e.detail || getStoredAcademicContext();
+      setDepartment(ctx.department || '');
+      setSemester(ctx.semester || '');
+    };
+    window.addEventListener('academicContextChanged', handleContextChange);
+    window.addEventListener('storage', handleContextChange);
+    return () => {
+      window.removeEventListener('academicContextChanged', handleContextChange);
+      window.removeEventListener('storage', handleContextChange);
+    };
+  }, []);
 
   // Fetch readiness report whenever scope changes
   const fetchReadiness = useCallback(async (dept, sem) => {
@@ -70,9 +48,85 @@ export default function GenerateTimetablePage({ user }) {
     finally { setReadinessLoading(false); }
   }, []);
 
+  const startPolling = useCallback((jid, dept, sem) => {
+    if (pollingRef.current) clearInterval(pollingRef.current);
+
+    pollingRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/scheduler/jobs/${jid}`, {
+          headers: user?.token ? { 'Authorization': `Bearer ${user.token}` } : {}
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        setJobStatus(data);
+        localStorage.setItem(`schedulerJob_${dept || ''}_${sem || ''}`, JSON.stringify(data));
+
+        if (['COMPLETED', 'FAILED', 'INFEASIBLE'].includes(data.status)) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+          setLoading(false);
+        }
+      } catch (e) {
+        console.error('Polling error:', e);
+      }
+    }, 1500);
+  }, [user]);
+
+  // Fetch the latest job status from backend on mount and scope change; fallback to localStorage
+  const fetchLatestJob = useCallback(async (dept, sem) => {
+    try {
+      const params = new URLSearchParams();
+      if (dept) params.append('dept', dept);
+      if (sem) params.append('sem', sem);
+      const res = await fetch(`/api/scheduler/jobs/latest?${params.toString()}`, {
+        headers: user?.token ? { 'Authorization': `Bearer ${user.token}` } : {}
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setJobId(data.jobId);
+        setJobStatus(data);
+        localStorage.setItem(`schedulerJob_${dept || ''}_${sem || ''}`, JSON.stringify(data));
+        if (data.status === 'QUEUED' || data.status === 'SOLVING') {
+          setLoading(true);
+          startPolling(data.jobId, dept, sem);
+        } else {
+          setLoading(false);
+        }
+        return;
+      }
+    } catch (e) {
+      console.warn('Backend fetch latest job failed, falling back to localStorage:', e);
+    }
+
+    // LocalStorage fallback
+    try {
+      const cached = localStorage.getItem(`schedulerJob_${dept || ''}_${sem || ''}`);
+      if (cached) {
+        const data = JSON.parse(cached);
+        setJobId(data.jobId);
+        setJobStatus(data);
+        if (data.status === 'QUEUED' || data.status === 'SOLVING') {
+          setLoading(true);
+          startPolling(data.jobId, dept, sem);
+        } else {
+          setLoading(false);
+        }
+      } else {
+        setJobId(null);
+        setJobStatus(null);
+        setLoading(false);
+      }
+    } catch (e) {
+      setJobId(null);
+      setJobStatus(null);
+      setLoading(false);
+    }
+  }, [user, startPolling]);
+
   useEffect(() => {
     fetchReadiness(department, semester);
-  }, [department, semester, fetchReadiness]);
+    fetchLatestJob(department, semester);
+  }, [department, semester, fetchReadiness, fetchLatestJob]);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -84,8 +138,6 @@ export default function GenerateTimetablePage({ user }) {
     setError('');
     setJobId(null);
     setJobStatus(null);
-    setTimetable(null);
-    subjectColorMap.current = {};
 
     try {
       const params = new URLSearchParams();
@@ -93,7 +145,7 @@ export default function GenerateTimetablePage({ user }) {
       if (semester)   params.append('semester', semester);
       const res = await fetch(`/api/scheduler/generate?${params.toString()}`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${user.token}` }
+        headers: user?.token ? { 'Authorization': `Bearer ${user.token}` } : {}
       });
       const data = await res.json();
 
@@ -104,89 +156,30 @@ export default function GenerateTimetablePage({ user }) {
           setError(data.message || data.error || 'Failed to start generation');
         }
         setLoading(false);
-        // Refresh readiness after attempt
         fetchReadiness(department, semester);
         return;
       }
 
       setJobId(data.jobId);
       setJobStatus({ status: data.status, message: data.message });
-      startPolling(data.jobId);
+      localStorage.setItem(`schedulerJob_${department || ''}_${semester || ''}`, JSON.stringify(data));
+      startPolling(data.jobId, department, semester);
     } catch (e) {
       setError('Network connection error: ' + e.message);
       setLoading(false);
     }
   };
 
-  const startPolling = (jid) => {
-    if (pollingRef.current) clearInterval(pollingRef.current);
-
-    pollingRef.current = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/scheduler/jobs/${jid}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        setJobStatus(data);
-
-        if (['COMPLETED', 'FAILED', 'INFEASIBLE'].includes(data.status)) {
-          clearInterval(pollingRef.current);
-          pollingRef.current = null;
-          setLoading(false);
-
-          if (data.status === 'COMPLETED' || data.status === 'INFEASIBLE') {
-            fetchTimetable(jid);
-          }
-        }
-      } catch (e) {
-        console.error('Polling error:', e);
-      }
-    }, 1500);
-  };
-
-  const fetchTimetable = async (jid) => {
-    try {
-      const res = await fetch(`/api/scheduler/timetables/${jid}`);
-      if (res.ok) {
-        const data = await res.json();
-        setTimetable(data);
-      }
-    } catch (e) { console.error('Fetch timetable error:', e); }
-  };
-
   const handleInspectContract = async () => {
     try {
-      const res = await fetch('/api/scheduler/input');
+      const res = await fetch('/api/scheduler/input', {
+        headers: user?.token ? { 'Authorization': `Bearer ${user.token}` } : {}
+      });
       if (res.ok) {
         setContractPayload(await res.json());
         setShowContractModal(true);
       }
     } catch (e) { console.error(e); }
-  };
-
-  // Group timetable entries by batch
-  const groupByBatch = (entries) => {
-    const groups = {};
-    for (const entry of entries) {
-      const key = entry.batchId;
-      if (!groups[key]) groups[key] = { batchName: entry.batchName, entries: [] };
-      groups[key].entries.push(entry);
-    }
-    return groups;
-  };
-
-  // Build a lookup: day -> period -> entry
-  const buildGrid = (entries) => {
-    const grid = {};
-    for (const day of DAYS_ORDER) {
-      grid[day] = {};
-      for (const p of PERIODS) grid[day][p] = null;
-    }
-    for (const entry of entries) {
-      if (grid[entry.dayOfWeek]) {
-        grid[entry.dayOfWeek][entry.periodNumber] = entry;
-      }
-    }
-    return grid;
   };
 
   const statusIcon = () => {
@@ -238,7 +231,7 @@ export default function GenerateTimetablePage({ user }) {
             value={department}
             onChange={e => {
               setDepartment(e.target.value);
-              setStoredAcademicContext({ department: e.target.value });
+              setStoredAcademicContext(e.target.value, semester);
             }}
           >
             <option value="">-- Select Department --</option>
@@ -251,7 +244,7 @@ export default function GenerateTimetablePage({ user }) {
             value={semester}
             onChange={e => {
               setSemester(e.target.value);
-              setStoredAcademicContext({ semester: e.target.value });
+              setStoredAcademicContext(department, e.target.value);
             }}
           >
             <option value="">-- Select Semester --</option>
@@ -365,12 +358,12 @@ export default function GenerateTimetablePage({ user }) {
             {statusIcon()}
             <div style={{ flex: 1 }}>
               <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: statusColor() }}>
-                {jobStatus.status === 'QUEUED' && 'Generation Queued'}
-                {jobStatus.status === 'SOLVING' && 'Solver Running...'}
-                {jobStatus.status === 'COMPLETED' && 'Timetable Generated Successfully'}
-                {jobStatus.status === 'FAILED' && 'Generation Failed'}
-                {jobStatus.status === 'INFEASIBLE' && 'Infeasible Schedule'}
-                {jobStatus.status === 'VALIDATION_FAILED' && 'Validation Errors Blocked Generation'}
+                {jobStatus.status === 'QUEUED' && 'Queued'}
+                {jobStatus.status === 'SOLVING' && 'Solving...'}
+                {jobStatus.status === 'COMPLETED' && 'Generated successfully'}
+                {jobStatus.status === 'FAILED' && 'Failed'}
+                {jobStatus.status === 'INFEASIBLE' && 'Infeasible'}
+                {jobStatus.status === 'VALIDATION_FAILED' && 'Validation Failed'}
               </h3>
               <p style={{ marginTop: '0.5rem', fontSize: '0.95rem', color: 'var(--text-secondary)' }}>
                 {jobStatus.message}
@@ -392,7 +385,7 @@ export default function GenerateTimetablePage({ user }) {
                     style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', padding: '0.65rem 1.25rem', fontSize: '0.88rem' }}
                     onClick={() => navigate('/timetable')}
                   >
-                    Open Multi-Section Timetable & Relocation Console <ArrowRight size={16} />
+                    View Timetables <ArrowRight size={16} />
                   </button>
                 </div>
               )}
@@ -441,148 +434,6 @@ export default function GenerateTimetablePage({ user }) {
               )}
             </div>
           </div>
-        </div>
-      )}
-
-      {/* Timetable Grid Display */}
-      {timetable && timetable.entries?.length > 0 && (
-        <div className="glass-panel" style={{ padding: '1.5rem', marginBottom: '1.5rem', border: '1px solid rgba(16, 185, 129, 0.4)', background: 'rgba(16, 185, 129, 0.05)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '1rem' }}>
-            <div>
-              <h3 style={{ fontSize: '1.15rem', fontWeight: 800, margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#6ee7b7' }}>
-                <ShieldCheck size={20} /> Conflict &amp; Constraint Validation Checklist
-              </h3>
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: '0.25rem 0 0 0' }}>
-                All hard scheduling constraints have been satisfied. Verify each item below before administrative publishing.
-              </p>
-            </div>
-            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => {
-                  handleGenerateClick();
-                }}
-                disabled={loading}
-              >
-                Request Automatic Revision
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                style={{ background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', border: 'none', fontWeight: 700 }}
-                onClick={() => {
-                  setTimetableConfirmed(true);
-                  setConfirmMsg('✓ Timetable successfully confirmed, approved, and published to faculty and student portals!');
-                  navigate('/timetable');
-                }}
-              >
-                <CheckCircle2 size={16} /> Confirm &amp; Publish Timetable
-              </button>
-            </div>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '0.75rem', marginTop: '1rem' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.84rem', cursor: 'pointer' }}>
-              <input type="checkbox" checked={checklist.facultyClash} onChange={e => setChecklist({ ...checklist, facultyClash: e.target.checked })} />
-              <span>✓ 0 Faculty Clashes (No simultaneous classes)</span>
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.84rem', cursor: 'pointer' }}>
-              <input type="checkbox" checked={checklist.roomClash} onChange={e => setChecklist({ ...checklist, roomClash: e.target.checked })} />
-              <span>✓ 0 Room Clashes (Exclusive room allocation)</span>
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.84rem', cursor: 'pointer' }}>
-              <input type="checkbox" checked={checklist.hodExclusion} onChange={e => setChecklist({ ...checklist, hodExclusion: e.target.checked })} />
-              <span>✓ HODs Excluded from Regular Teaching Pool</span>
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.84rem', cursor: 'pointer' }}>
-              <input type="checkbox" checked={checklist.maxCapacity} onChange={e => setChecklist({ ...checklist, maxCapacity: e.target.checked })} />
-              <span>✓ Max 70-Student Capacity Enforced</span>
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.84rem', cursor: 'pointer' }}>
-              <input type="checkbox" checked={checklist.floorCoherence} onChange={e => setChecklist({ ...checklist, floorCoherence: e.target.checked })} />
-              <span>✓ Block &amp; Floor Department Coherence Checked</span>
-            </label>
-          </div>
-        </div>
-      )}
-
-      {/* Timetable Grid Display */}
-      {timetable && timetable.entries?.length > 0 && (() => {
-        const batches = groupByBatch(timetable.entries);
-        return Object.entries(batches).map(([batchId, { batchName, entries }]) => {
-          const grid = buildGrid(entries);
-          return (
-            <div key={batchId} className="glass-panel" style={{ padding: '1.5rem', marginBottom: '2rem' }}>
-              <h3 style={{ fontSize: '1.1rem', fontWeight: 800, marginBottom: '1rem', color: 'var(--accent-primary)' }}>
-                📅 {batchName} — Weekly Timetable
-              </h3>
-              <div className="data-table-container">
-                <table className="data-table" style={{ fontSize: '0.78rem' }}>
-                  <thead>
-                    <tr>
-                      <th style={{ width: '100px' }}>Day</th>
-                      {PERIODS.map(p => (
-                        <th key={p} style={{ textAlign: 'center', minWidth: '110px' }}>P{p}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {DAYS_ORDER.map(day => (
-                      <tr key={day}>
-                        <td style={{ fontWeight: 700, fontSize: '0.8rem' }}>
-                          {day.charAt(0) + day.slice(1).toLowerCase()}
-                        </td>
-                        {PERIODS.map(p => {
-                          const entry = grid[day]?.[p];
-                          if (!entry) {
-                            return <td key={p} style={{ textAlign: 'center', color: 'var(--text-muted)', opacity: 0.4 }}>—</td>;
-                          }
-                          const color = getSubjectColor(entry.subjectId, subjectColorMap);
-                          return (
-                            <td key={p} style={{
-                              background: color.bg,
-                              borderLeft: `3px solid ${color.border}`,
-                              padding: '0.4rem 0.5rem',
-                              verticalAlign: 'top'
-                            }}>
-                              <div style={{ fontWeight: 700, color: color.text, fontSize: '0.78rem' }}>
-                                {entry.subjectCode}
-                              </div>
-                              <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                                {entry.facultyName}
-                              </div>
-                              <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '1px' }}>
-                                {entry.roomCode}
-                                <span style={{
-                                  marginLeft: '4px',
-                                  padding: '1px 4px',
-                                  borderRadius: '3px',
-                                  background: entry.sessionType === 'LAB' ? 'rgba(245,158,11,0.3)' : 'rgba(99,102,241,0.2)',
-                                  color: entry.sessionType === 'LAB' ? '#fbbf24' : '#a5b4fc',
-                                  fontSize: '0.6rem',
-                                  fontWeight: 600
-                                }}>
-                                  {entry.sessionType}
-                                </span>
-                              </div>
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          );
-        });
-      })()}
-
-      {/* Empty timetable message */}
-      {timetable && (!timetable.entries || timetable.entries.length === 0) && (
-        <div className="glass-panel" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-          <p>No timetable entries were generated. The solver may have found the scheduling problem infeasible.</p>
         </div>
       )}
 

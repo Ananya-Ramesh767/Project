@@ -163,6 +163,9 @@ export default function FacultyManagementPage({ user }) {
   const [academicYear, setAcademicYear] = useState('2026 - 2027');
   const [semesterFilter, setSemesterFilter] = useState('Select Semester');
   const [headerDeptFilter, setHeaderDeptFilter] = useState('Select Department');
+  // Helper: check if both semester and department are explicitly chosen (not placeholders or 'ALL')
+  const contextSelected = semesterFilter && semesterFilter !== 'Select Semester' && semesterFilter !== 'ALL' &&
+    headerDeptFilter && headerDeptFilter !== 'Select Department' && headerDeptFilter !== 'ALL';
   const [selectedSection, setSelectedSection] = useState('ALL');
 
   // Faculty Master State
@@ -458,6 +461,7 @@ export default function FacultyManagementPage({ user }) {
 
   // Finalize and Save Subject-Faculty Assignments to SubjectOfferings
   const handleFinalizeAndSave = async () => {
+    if (!contextSelected) return;
     setFinalizing(true);
     setSaveSuccessMsg('');
     try {
@@ -497,6 +501,7 @@ export default function FacultyManagementPage({ user }) {
 
   // Trigger automated assignment re-distribution
   const handleAutoAssignAll = () => {
+    if (!contextSelected) return;
     fetchProposalsAndBatches();
   };
 
@@ -1200,6 +1205,7 @@ export default function FacultyManagementPage({ user }) {
             <button
               type="button"
               onClick={handleAutoAssignAll}
+              disabled={!contextSelected}
               className="btn btn-secondary"
               style={{
                 padding: '0.42rem 0.85rem',
@@ -1215,7 +1221,7 @@ export default function FacultyManagementPage({ user }) {
 
             <button
               type="button"
-              disabled={finalizing || sectionAllocations.length === 0}
+              disabled={!contextSelected || finalizing || sectionAllocations.length === 0}
               onClick={handleFinalizeAndSave}
               className="btn btn-primary"
               style={{
@@ -1249,7 +1255,12 @@ export default function FacultyManagementPage({ user }) {
           </div>
         )}
 
-        {/* Section Table */}
+        {!contextSelected && (
+          <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-dim)', fontSize: '0.88rem' }}>
+            Select a semester and department to proceed.
+          </div>
+        )}
+        {contextSelected && (
         <div style={{ overflowX: 'auto', maxHeight: '520px', overflowY: 'auto', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
           <table className="table" style={{ fontSize: '0.78rem', width: '100%', marginBottom: 0 }}>
             <thead>
@@ -1404,6 +1415,7 @@ export default function FacultyManagementPage({ user }) {
             </tbody>
           </table>
         </div>
+        )}
 
         {/* Section Dashboard Footer KPIs */}
         <div style={{

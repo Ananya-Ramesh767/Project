@@ -376,6 +376,13 @@ public class FacultyController {
             loadTracker.put(f.getId(), scheduled);
         }
 
+        Set<Long> proposalSubjectIds = subjects.stream().map(Subject::getId).collect(Collectors.toSet());
+        List<SubjectOffering> otherOfferings = offeringRepository.findByActiveTrue().stream()
+                .filter(o -> o.getSubject() == null || !proposalSubjectIds.contains(o.getSubject().getId()))
+                .collect(Collectors.toList());
+        loadTracker.clear();
+        loadTracker.putAll(allocationService.buildOfferingLoadMap(allActiveFaculty, otherOfferings));
+
         // Build proposals
         List<Map<String, Object>> proposals = new ArrayList<>();
 
@@ -719,6 +726,22 @@ public class FacultyController {
 
             if (facultyIds.isEmpty()) continue;
 
+            // Department guard: keep only faculty from the subject's mapped pool
+            List<Faculty> deptPool = allocationService.buildCandidatePool(
+                    subject, facultyRepository.findByActiveTrue(), department, false);
+            Set<Long> deptPoolIds = deptPool.stream().map(Faculty::getId).collect(Collectors.toSet());
+            if (!deptPoolIds.isEmpty()) {
+                facultyIds.removeIf(id -> {
+                    boolean outside = !deptPoolIds.contains(id);
+                    if (outside) {
+                        log.warn("[ConfirmAssign] Rejected faculty {} for subject [{}]: outside mapped department",
+                                id, subject.getSubjectCode());
+                    }
+                    return outside;
+                });
+            }
+            if (facultyIds.isEmpty()) continue;
+
             // Load selected faculty entities & persist eligibility
             List<Faculty> confirmedFacultyList = new ArrayList<>();
             for (Long fId : facultyIds) {
@@ -768,7 +791,11 @@ public class FacultyController {
 
             // Apply to batches/sections: distribute eligible faculty across sections
             // Use workload-aware selection instead of naive round-robin
-            Map<Long, Integer> sectionLoadMap = allocationService.buildInitialLoadMap(confirmedFacultyList);
+            List<SubjectOffering> otherOfferings = offeringRepository.findByActiveTrue().stream()
+                    .filter(o -> o.getSubject() != null && !Objects.equals(o.getSubject().getId(), subjectId))
+                    .collect(Collectors.toList());
+            Map<Long, Integer> sectionLoadMap = new HashMap<>(
+                    allocationService.buildOfferingLoadMap(confirmedFacultyList, otherOfferings));
             int subjectHours = allocationService.computeWeeklyHours(subject);
 
             for (int i = 0; i < relevantBatches.size(); i++) {
@@ -873,6 +900,10 @@ public class FacultyController {
             if (batch == null || subject == null) {
                 continue;
             }
+            if (subject.getSemester() == null || batch.getSemester() == null || !Objects.equals(subject.getSemester(), batch.getSemester())) {
+                warnings.add("Skipped " + subject.getSubjectCode() + " for " + batch.getBatchName() + ": semester does not match the section.");
+                continue;
+            }
 
             Faculty faculty = null;
             if (facultyId != null) {
@@ -899,7 +930,7 @@ public class FacultyController {
                     off.setAssignedFaculty(faculty);
                     off.setActive(true);
                     if (academicYear != null) off.setAcademicYear(academicYear);
-                    if (semester != null) off.setSemester(semester);
+                    off.setSemester(subject.getSemester());
                     offeringRepository.save(off);
                     updatedCount++;
                 }
@@ -909,7 +940,7 @@ public class FacultyController {
                         .subject(subject)
                         .assignedFaculty(faculty)
                         .academicYear(academicYear)
-                        .semester(semester != null ? semester : (batch.getSemester() != null ? batch.getSemester() : 3))
+                        .semester(subject.getSemester())
                         .active(true)
                         .build();
                 offeringRepository.save(newOff);

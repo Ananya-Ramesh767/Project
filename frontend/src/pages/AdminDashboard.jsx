@@ -6,6 +6,7 @@ import {
   ArrowRight, ShieldCheck, Filter
 } from 'lucide-react';
 import { INSTITUTIONAL_PROGRAMMES } from '../utils/programmes';
+import { getStoredAcademicContext, setStoredAcademicContext } from '../utils/academicContext';
 
 const ACCENT = [
   'var(--accent-primary)',
@@ -29,11 +30,25 @@ const STEPS = [
 ];
 
 export default function AdminDashboard({ user }) {
-  const [selectedDept, setSelectedDept] = useState(() => localStorage.getItem('academicContext_dept') || '');
-  const [selectedSemester, setSelectedSemester] = useState(() => localStorage.getItem('academicContext_semester') || '');
+  const [selectedDept, setSelectedDept] = useState(() => getStoredAcademicContext().department || '');
+  const [selectedSemester, setSelectedSemester] = useState(() => getStoredAcademicContext().semester || '');
 
   const [stats, setStats] = useState({ subjects: 0, faculty: 0, rooms: 0, batches: 0 });
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const handleContextChange = (e) => {
+      const ctx = e.detail || getStoredAcademicContext();
+      setSelectedDept(ctx.department || '');
+      setSelectedSemester(ctx.semester || '');
+    };
+    window.addEventListener('academicContextChanged', handleContextChange);
+    window.addEventListener('storage', handleContextChange);
+    return () => {
+      window.removeEventListener('academicContextChanged', handleContextChange);
+      window.removeEventListener('storage', handleContextChange);
+    };
+  }, []);
 
   useEffect(() => {
     loadStats();
@@ -41,20 +56,12 @@ export default function AdminDashboard({ user }) {
 
   const handleDeptChange = (dept) => {
     setSelectedDept(dept);
-    if (dept) {
-      localStorage.setItem('academicContext_dept', dept);
-    } else {
-      localStorage.removeItem('academicContext_dept');
-    }
+    setStoredAcademicContext(dept, selectedSemester);
   };
 
   const handleSemesterChange = (sem) => {
     setSelectedSemester(sem);
-    if (sem) {
-      localStorage.setItem('academicContext_semester', sem);
-    } else {
-      localStorage.removeItem('academicContext_semester');
-    }
+    setStoredAcademicContext(selectedDept, sem);
   };
 
   const loadStats = async () => {

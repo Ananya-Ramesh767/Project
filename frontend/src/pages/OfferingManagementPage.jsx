@@ -15,6 +15,20 @@ export default function OfferingManagementPage({ user }) {
   const [filterDept, setFilterDept] = useState(() => initialContext.department || '');
   const [filterSem, setFilterSem] = useState(() => initialContext.semester || '');
 
+  useEffect(() => {
+    const handleContextChange = (e) => {
+      const ctx = e.detail || getStoredAcademicContext();
+      setFilterDept(ctx.department || '');
+      setFilterSem(ctx.semester || '');
+    };
+    window.addEventListener('academicContextChanged', handleContextChange);
+    window.addEventListener('storage', handleContextChange);
+    return () => {
+      window.removeEventListener('academicContextChanged', handleContextChange);
+      window.removeEventListener('storage', handleContextChange);
+    };
+  }, []);
+
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState({ batchId: '', subjectId: '', assignedFacultyId: '', academicYear: '2026-2027' });
   const [formError, setFormError] = useState('');
@@ -53,11 +67,11 @@ export default function OfferingManagementPage({ user }) {
 
   const handleDeptChange = (val) => {
     setFilterDept(val);
-    localStorage.setItem('academicContext_dept', val);
+    setStoredAcademicContext(val, filterSem);
   };
   const handleSemChange = (val) => {
     setFilterSem(val);
-    localStorage.setItem('academicContext_semester', val);
+    setStoredAcademicContext(filterDept, val);
   };
 
   // Load eligible faculty for a subject (cached)

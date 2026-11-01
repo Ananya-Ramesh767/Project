@@ -242,7 +242,7 @@ public class FacultyAllocationService {
      * Flow per Master Prompt Section 6:
      * Subject -> Course Code -> Extract Prefix -> Find Approved Department Mapping -> Resolve Department Key -> Retrieve Faculty with Matching Department Key
      */
-    private List<Faculty> buildCandidatePool(Subject subject, List<Faculty> allFaculty,
+    public List<Faculty> buildCandidatePool(Subject subject, List<Faculty> allFaculty,
                                               String department, boolean isDeptSubject) {
         // Exclude HODs, lab technicians, and non-teaching staff strictly from teaching candidate pool
         List<Faculty> eligibleFaculty = allFaculty.stream()

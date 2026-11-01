@@ -15,9 +15,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 
 @RestController
 @RequestMapping("/api/scheduler")
@@ -57,14 +55,19 @@ public class SchedulerController {
      * POST /api/scheduler/generate
      * Validates data readiness, creates a solver job, and kicks off async generation.
      *
-     * Optional scope params: ?department=Computer Science Engineering&semester=3
+     * Optional scope params: ?department=Computer Science Engineering&semester=3 or ?dept=...&sem=...
      */
     @PostMapping("/generate")
     public ResponseEntity<?> triggerTimetableGeneration(
+            @RequestParam(required = false) String dept,
             @RequestParam(required = false) String department,
+            @RequestParam(required = false) Integer sem,
             @RequestParam(required = false) Integer semester) {
+        String targetDept = (dept != null && !dept.isBlank()) ? dept : department;
+        Integer targetSem = (sem != null) ? sem : semester;
+
         // 1. Scope-aware data readiness check
-        DataReadinessResult readiness = readinessService.checkDataReadiness(department, semester, null);
+        DataReadinessResult readiness = readinessService.checkDataReadiness(targetDept, targetSem, null);
 
         if (!readiness.isReady()) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
@@ -80,15 +83,15 @@ public class SchedulerController {
         TimetableJob job = TimetableJob.builder()
                 .id(jobId)
                 .status("QUEUED")
-                .department(department)
-                .semester(semester)
+                .department(targetDept)
+                .semester(targetSem)
                 .message("Timetable generation queued. Solver will start shortly.")
                 .createdAt(LocalDateTime.now())
                 .build();
         jobRepository.save(job);
 
         // 3. Start async solver
-        solverService.solveAsync(jobId, department, semester);
+        solverService.solveAsync(jobId, targetDept, targetSem);
 
         // 4. Return immediately
         return ResponseEntity.ok(Map.of(
@@ -96,6 +99,55 @@ public class SchedulerController {
                 "status", "QUEUED",
                 "message", "Timetable generation started"
         ));
+    }
+
+    /**
+     * GET /api/scheduler/jobs/latest
+     * Returns the latest job for a given department and semester scope.
+     */
+    @GetMapping("/jobs/latest")
+    public ResponseEntity<?> getLatestJob(
+            @RequestParam(required = false) String dept,
+            @RequestParam(required = false) String department,
+            @RequestParam(required = false) Integer sem,
+            @RequestParam(required = false) Integer semester) {
+        final String targetDept = (dept != null && !dept.isBlank()) ? dept : department;
+        final Integer targetSem = (sem != null) ? sem : semester;
+
+        List<TimetableJob> allJobs = jobRepository.findAll();
+        allJobs.sort(Comparator.comparing(TimetableJob::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder())));
+
+        TimetableJob latestJob = allJobs.stream()
+                .filter(j -> {
+                    if (targetDept != null && !targetDept.isBlank() && !targetDept.equalsIgnoreCase("ALL")) {
+                        if (j.getDepartment() == null || !com.odysseus.backend.util.DepartmentMatcher.matches(j.getDepartment(), targetDept)) {
+                            return false;
+                        }
+                    }
+                    if (targetSem != null) {
+                        if (j.getSemester() == null || !j.getSemester().equals(targetSem)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                })
+                .findFirst()
+                .orElse(null);
+
+        if (latestJob == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        Map<String, Object> res = new HashMap<>();
+        res.put("jobId", latestJob.getId());
+        res.put("status", latestJob.getStatus());
+        res.put("message", latestJob.getMessage() != null ? latestJob.getMessage() : "");
+        res.put("department", latestJob.getDepartment() != null ? latestJob.getDepartment() : "");
+        res.put("semester", latestJob.getSemester());
+        res.put("totalEntries", latestJob.getTotalEntries());
+        res.put("createdAt", latestJob.getCreatedAt() != null ? latestJob.getCreatedAt().toString() : "");
+        res.put("completedAt", latestJob.getCompletedAt() != null ? latestJob.getCompletedAt().toString() : "");
+        return ResponseEntity.ok(res);
     }
 
 

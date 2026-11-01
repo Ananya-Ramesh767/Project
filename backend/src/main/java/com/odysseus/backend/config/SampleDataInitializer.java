@@ -62,15 +62,19 @@ public class SampleDataInitializer implements CommandLineRunner {
         // that would destroy real user data and violate FK constraints
         // from lesson_plans, timetable_assignments, etc.
         List<String> legacyCodes = List.of(
-                "TEST-PERSIST-101", "CSE-A101", "CSE-A102", "CSE-A103", "CSE-LAB1",
+                "TEST-PERSIST-101", "CSE-A101", "CSE-A102", "CSE-A103",
                 "A-101", "A-102", "A-201", "A-LAB-1",
                 "BLO-301", "BLO-302", "BLO-401", "BLO-402", "BLO-403", "BLO-404", "BLO-405", "BLO-406", "BLO-407",
                 "BLO-501", "BLO-502", "BLO-503", "BLO-504", "BLO-505", "BLO-506", "BLO-507"
         );
         for (String code : legacyCodes) {
             roomRepository.findByRoomCode(code).ifPresent(r -> {
-                log.debug("Removing legacy/demo room {}", code);
-                roomRepository.delete(r);
+                try {
+                    log.debug("Removing legacy/demo room {}", code);
+                    roomRepository.delete(r);
+                } catch (Exception ex) {
+                    log.warn("Could not delete legacy room {}: {}", code, ex.getMessage());
+                }
             });
         }
     }

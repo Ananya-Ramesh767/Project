@@ -15,6 +15,20 @@ export default function BatchManagementPage({ user }) {
   const [filterSemester, setFilterSemester] = useState(() => initialContext.semester || '');
   const [errorMsg, setErrorMsg] = useState('');
 
+  useEffect(() => {
+    const handleContextChange = (e) => {
+      const ctx = e.detail || getStoredAcademicContext();
+      setFilterDept(ctx.department || '');
+      setFilterSemester(ctx.semester || '');
+    };
+    window.addEventListener('academicContextChanged', handleContextChange);
+    window.addEventListener('storage', handleContextChange);
+    return () => {
+      window.removeEventListener('academicContextChanged', handleContextChange);
+      window.removeEventListener('storage', handleContextChange);
+    };
+  }, []);
+
   const [form, setForm] = useState({
     batchName: '',
     section: 'A',
@@ -103,12 +117,12 @@ export default function BatchManagementPage({ user }) {
 
   const handleDeptFilter = (dept) => {
     setFilterDept(dept);
-    if (dept && dept !== 'ALL') setStoredAcademicContext({ department: dept });
+    setStoredAcademicContext(dept, filterSemester);
   };
 
   const handleSemesterFilter = (sem) => {
     setFilterSemester(sem);
-    if (sem && sem !== 'ALL') setStoredAcademicContext({ semester: sem });
+    setStoredAcademicContext(filterDept, sem);
   };
 
   const filteredBatches = batches.filter(b => {

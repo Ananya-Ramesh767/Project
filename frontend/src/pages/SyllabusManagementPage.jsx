@@ -62,11 +62,28 @@ export default function SyllabusManagementPage({ user }) {
 
   const fetchSubjects = async () => {
     try {
-      const res = await fetch('/api/admin/subjects', { headers: authHeaders });
-      if (res.ok) {
-        const data = await res.json();
-        setSubjects(data);
-        if (data.length > 0 && !selectedSubjectId) setSelectedSubjectId(String(data[0].id));
+      const isFaculty = user?.role === 'ROLE_FACULTY';
+      if (isFaculty) {
+        const res = await fetch('/api/faculty/my-subjects', { headers: authHeaders });
+        if (res.ok) {
+          const offerings = await res.json();
+          const map = new Map();
+          offerings.forEach(o => {
+            if (o.subject && !map.has(o.subject.id)) {
+              map.set(o.subject.id, o.subject);
+            }
+          });
+          const list = Array.from(map.values());
+          setSubjects(list);
+          if (list.length > 0 && !selectedSubjectId) setSelectedSubjectId(String(list[0].id));
+        }
+      } else {
+        const res = await fetch('/api/admin/subjects', { headers: authHeaders });
+        if (res.ok) {
+          const data = await res.json();
+          setSubjects(data);
+          if (data.length > 0 && !selectedSubjectId) setSelectedSubjectId(String(data[0].id));
+        }
       }
     } catch (e) { console.error(e); }
   };

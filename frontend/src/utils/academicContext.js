@@ -54,6 +54,37 @@ export function setStoredAcademicContext(deptOrObj, maybeSem) {
       localStorage.removeItem('academicContext_semester');
     }
   }
+
+  // Dispatch custom window event so all active components in the SPA update instantly
+  if (typeof window !== 'undefined') {
+    const current = getStoredAcademicContext();
+    window.dispatchEvent(new CustomEvent('academicContextChanged', { detail: current }));
+  }
+}
+
+/**
+ * Custom React hook to subscribe to academic context changes everywhere.
+ */
+export function useAcademicContext() {
+  const [context, setContext] = React.useState(getStoredAcademicContext);
+
+  React.useEffect(() => {
+    const handleContextChange = (e) => {
+      setContext(e.detail || getStoredAcademicContext());
+    };
+    window.addEventListener('academicContextChanged', handleContextChange);
+    window.addEventListener('storage', handleContextChange);
+    return () => {
+      window.removeEventListener('academicContextChanged', handleContextChange);
+      window.removeEventListener('storage', handleContextChange);
+    };
+  }, []);
+
+  const updateContext = (newDept, newSem) => {
+    setStoredAcademicContext(newDept, newSem);
+  };
+
+  return [context, updateContext];
 }
 
 /**

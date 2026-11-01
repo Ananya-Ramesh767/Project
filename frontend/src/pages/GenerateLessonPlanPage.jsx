@@ -74,21 +74,46 @@ export default function GenerateLessonPlanPage({ user }) {
 
   const fetchPickerOptions = async () => {
     try {
-      const [oRes, cRes, sRes] = await Promise.all([
-        fetch('/api/admin/offerings', { headers: authHeaders }),
-        fetch('/api/admin/calendar', { headers: authHeaders }),
-        fetch('/api/admin/subjects', { headers: authHeaders })
-      ]);
-      if (oRes.status === 403 || cRes.status === 403) {
-        setPickerBlocked(true);
-        return;
-      }
-      if (oRes.ok) setOfferings(await oRes.json());
-      if (sRes.ok) setSubjects(await sRes.json());
-      if (cRes.ok) {
-        const cals = await cRes.json();
-        setCalendars(cals);
-        if (cals.length > 0) setCalendarId(String(cals[0].id));
+      const isFaculty = user?.role === 'ROLE_FACULTY';
+      if (isFaculty) {
+        const [mySubRes, cRes] = await Promise.all([
+          fetch('/api/faculty/my-subjects', { headers: authHeaders }),
+          fetch('/api/admin/calendar', { headers: authHeaders })
+        ]);
+        if (mySubRes.ok) {
+          const myOffers = await mySubRes.json();
+          setOfferings(myOffers);
+          const subjMap = new Map();
+          myOffers.forEach(o => {
+            if (o.subject && !subjMap.has(o.subject.id)) subjMap.set(o.subject.id, o.subject);
+          });
+          setSubjects(Array.from(subjMap.values()));
+          if (myOffers.length > 0 && !offeringId) {
+            setOfferingId(String(myOffers[0].id));
+          }
+        }
+        if (cRes.ok) {
+          const cals = await cRes.json();
+          setCalendars(cals);
+          if (cals.length > 0 && !calendarId) setCalendarId(String(cals[0].id));
+        }
+      } else {
+        const [oRes, cRes, sRes] = await Promise.all([
+          fetch('/api/admin/offerings', { headers: authHeaders }),
+          fetch('/api/admin/calendar', { headers: authHeaders }),
+          fetch('/api/admin/subjects', { headers: authHeaders })
+        ]);
+        if (oRes.status === 403 || cRes.status === 403) {
+          setPickerBlocked(true);
+          return;
+        }
+        if (oRes.ok) setOfferings(await oRes.json());
+        if (sRes.ok) setSubjects(await sRes.json());
+        if (cRes.ok) {
+          const cals = await cRes.json();
+          setCalendars(cals);
+          if (cals.length > 0) setCalendarId(String(cals[0].id));
+        }
       }
     } catch (e) { console.error(e); }
   };
@@ -186,6 +211,27 @@ export default function GenerateLessonPlanPage({ user }) {
     } catch (e) { setActionError(e.message); }
   };
 
+
+  const unitProgress = useMemo(() => {
+    if (!sessions || sessions.length === 0) return [];
+    const unitsMap = {};
+    sessions.forEach(s => {
+      const uNum = s.syllabusUnit?.unitNumber || 1;
+      const uTitle = s.syllabusUnit?.title || `Unit ${uNum}`;
+      if (!unitsMap[uNum]) {
+        unitsMap[uNum] = { unitNumber: uNum, title: uTitle, total: 0, completed: 0 };
+      }
+      unitsMap[uNum].total += 1;
+      if (s.status === 'COMPLETED') {
+        unitsMap[uNum].completed += 1;
+      }
+    });
+    return Object.values(unitsMap).sort((a, b) => a.unitNumber - b.unitNumber);
+  }, [sessions]);
+
+  const totalSessionsCount = sessions.length;
+  const completedSessionsCount = sessions.filter(s => s.status === 'COMPLETED').length;
+  const overallPercentage = totalSessionsCount > 0 ? Math.round((completedSessionsCount / totalSessionsCount) * 100) : 0;
 
   const groupedByDate = useMemo(() => {
     const map = {};
@@ -336,6 +382,34 @@ export default function GenerateLessonPlanPage({ user }) {
               )}
             </div>
             {!pickerMode && null}
+          </div>
+
+          {/* Overall & Per-Unit Progress Bars */}
+          <div style={{ marginTop: '1.25rem', paddingTop: '1.25rem', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <span style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-main)' }}>Overall Progress</span>
+              <span style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--accent-primary)' }}>{completedSessionsCount} / {totalSessionsCount} ({overallPercentage}%)</span>
+            </div>
+            <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.08)', borderRadius: '999px', overflow: 'hidden', marginBottom: '1.25rem' }}>
+              <div style={{ width: `${overallPercentage}%`, height: '100%', background: 'linear-gradient(90deg, #10b981, #06b6d4)', borderRadius: '999px', transition: 'width 0.3s ease' }} />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem' }}>
+              {unitProgress.map(u => {
+                const uPct = u.total > 0 ? Math.round((u.completed / u.total) * 100) : 0;
+                return (
+                  <div key={u.unitNumber} style={{ background: 'rgba(255,255,255,0.03)', padding: '0.65rem 0.85rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', fontWeight: 600, marginBottom: '0.35rem' }}>
+                      <span style={{ color: 'var(--text-muted)' }}>Unit {u.unitNumber}</span>
+                      <span style={{ color: uPct === 100 ? '#34d399' : 'var(--text-main)' }}>{u.completed}/{u.total} ({uPct}%)</span>
+                    </div>
+                    <div style={{ width: '100%', height: '5px', background: 'rgba(255,255,255,0.08)', borderRadius: '999px', overflow: 'hidden' }}>
+                      <div style={{ width: `${uPct}%`, height: '100%', background: uPct === 100 ? '#10b981' : '#6366f1', borderRadius: '999px' }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}

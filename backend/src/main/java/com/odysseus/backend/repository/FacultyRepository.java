@@ -7,6 +7,7 @@ import java.util.Optional;
 
 public interface FacultyRepository extends JpaRepository<Faculty, Long> {
     List<Faculty> findByActiveTrue();
+    Optional<Faculty> findByEmailIgnoreCaseAndActiveTrue(String email);
     Optional<Faculty> findByEmployeeId(String employeeId);
     boolean existsByEmployeeId(String employeeId);
     boolean existsByEmployeeIdAndIdNot(String employeeId, Long id);

@@ -1,43 +1,55 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Lock, User, AlertCircle, ArrowRight, Phone, Mail, Check, Building2 } from 'lucide-react';
-import { INSTITUTIONAL_PROGRAMMES } from '../utils/programmes';
+import { Lock, User, AlertCircle, ArrowRight, Eye, EyeOff, Shield, GraduationCap, Loader2 } from 'lucide-react';
 
 export default function LoginPage({ onLogin }) {
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin123');
+  const [selectedRole, setSelectedRole] = useState('ROLE_ADMIN');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState({});
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  // Personal Details step after role selection / auth
-  const [showPersonalDetails, setShowPersonalDetails] = useState(false);
-  const [pendingAuthData, setPendingAuthData] = useState(null);
-  const [personalForm, setPersonalForm] = useState({
-    fullName: '',
-    email: '',
-    phone: '',
-    department: ''
-  });
-  const [detailsError, setDetailsError] = useState('');
+  // Load remembered username on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('eec_remembered_user');
+    if (saved) {
+      setUsername(saved);
+      setRememberMe(true);
+    }
+  }, []);
+
+  const validateFields = () => {
+    const errors = {};
+    if (!username.trim()) errors.username = 'Username is required';
+    if (!password) errors.password = 'Password is required';
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
 
   const handleLoginSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    if (!validateFields()) return;
     setLoading(true);
 
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
+        body: JSON.stringify({ username: username.trim(), password, role: selectedRole })
       });
 
       if (!res.ok) {
         if (res.status === 401) {
-          throw new Error('Invalid username or password. Please try again.');
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.message || 'Invalid username or password. Please try again.');
         } else if (res.status === 400) {
-          throw new Error('Invalid login data submitted.');
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.message || 'Invalid login data submitted.');
         } else if (res.status >= 500) {
           throw new Error('The server encountered an error. Please try again later.');
         } else {
@@ -47,16 +59,24 @@ export default function LoginPage({ onLogin }) {
       }
 
       const data = await res.json();
-      setPendingAuthData(data);
 
-      // Pre-fill only the fullName from the auth response; leave everything else blank
-      setPersonalForm({
-        fullName: data.fullName || '',
-        email: '',
-        phone: '',
-        department: ''
-      });
-      setShowPersonalDetails(true);
+      // Remember username if checkbox is checked
+      if (rememberMe) {
+        localStorage.setItem('eec_remembered_user', username.trim());
+      } else {
+        localStorage.removeItem('eec_remembered_user');
+      }
+
+      onLogin(data);
+
+      if (data.role === 'ROLE_ADMIN') {
+        // Reset academic context on fresh admin login so all numbers start as 0
+        localStorage.removeItem('academicContext_dept');
+        localStorage.removeItem('academicContext_semester');
+        navigate('/dashboard');
+      } else {
+        navigate('/faculty-portal');
+      }
     } catch (err) {
       if (err.name === 'TypeError') {
         setError('The backend server is unavailable. Please check your connection.');
@@ -68,48 +88,18 @@ export default function LoginPage({ onLogin }) {
     }
   };
 
-  const handlePersonalDetailsSubmit = (e) => {
-    e.preventDefault();
-    setDetailsError('');
-
-    if (!personalForm.fullName.trim()) {
-      setDetailsError('Please enter your full name.');
-      return;
-    }
-    if (!personalForm.email.includes('@')) {
-      setDetailsError('Please enter a valid institutional email address.');
-      return;
-    }
-    if (!personalForm.phone || personalForm.phone.trim().length < 8) {
-      setDetailsError('Please enter a valid phone number.');
-      return;
-    }
-
-    const mergedUser = {
-      ...pendingAuthData,
-      fullName: personalForm.fullName,
-      email: personalForm.email,
-      phone: personalForm.phone,
-      department: pendingAuthData.role === 'ROLE_FACULTY' ? personalForm.department : undefined
-    };
-
-    localStorage.setItem('odysseus_profile', JSON.stringify(personalForm));
-    onLogin(mergedUser);
-
-    if (mergedUser.role === 'ROLE_ADMIN') {
-      navigate('/dashboard');
-    } else {
-      navigate('/my-lesson-plans');
-    }
-  };
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', padding: '1.5rem', background: 'var(--bg-gradient)', backgroundAttachment: 'fixed' }}>
-      <div className="fade-in-up" style={{ textAlign: 'center', marginBottom: '2.25rem' }}>
-        <div className="brand-wordmark" style={{ fontSize: '2.2rem', lineHeight: 1.1 }}>
+      <div className="fade-in-up" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', marginBottom: '2.25rem', width: '100%' }}>
+        <img
+          src="/easwari-logo.png"
+          alt="Easwari Engineering College"
+          style={{ height: '80px', maxWidth: '340px', width: 'auto', marginBottom: '0.85rem', objectFit: 'contain', display: 'block', margin: '0 auto 0.85rem auto' }}
+        />
+        <div className="brand-wordmark" style={{ fontSize: '2.2rem', lineHeight: 1.1, textAlign: 'center', width: '100%' }}>
           Easwari Engineering College
         </div>
-        <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginTop: '0.5rem' }}>
+        <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginTop: '0.5rem', textAlign: 'center' }}>
           Academic Management &amp; Smart Timetable Scheduler
         </p>
       </div>
@@ -122,6 +112,37 @@ export default function LoginPage({ onLogin }) {
           </p>
         </div>
 
+        {/* Role Selector Toggle */}
+        <div style={{ display: 'flex', gap: '0', marginBottom: '1.2rem', borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
+          <button
+            type="button"
+            onClick={() => setSelectedRole('ROLE_ADMIN')}
+            style={{
+              flex: 1, padding: '0.65rem 0.5rem', border: 'none', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem',
+              fontWeight: 700, fontSize: '0.82rem', transition: 'all 0.2s',
+              background: selectedRole === 'ROLE_ADMIN' ? 'var(--accent-primary, #dc2626)' : 'transparent',
+              color: selectedRole === 'ROLE_ADMIN' ? '#fff' : 'var(--text-muted)',
+            }}
+          >
+            <Shield size={15} /> Admin
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedRole('ROLE_FACULTY')}
+            style={{
+              flex: 1, padding: '0.65rem 0.5rem', border: 'none', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem',
+              fontWeight: 700, fontSize: '0.82rem', transition: 'all 0.2s',
+              borderLeft: '1px solid var(--border-color)',
+              background: selectedRole === 'ROLE_FACULTY' ? 'var(--accent-primary, #dc2626)' : 'transparent',
+              color: selectedRole === 'ROLE_FACULTY' ? '#fff' : 'var(--text-muted)',
+            }}
+          >
+            <GraduationCap size={15} /> Faculty
+          </button>
+        </div>
+
         {error && (
           <div className="alert alert-danger" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.2rem' }}>
             <AlertCircle size={18} />
@@ -131,37 +152,70 @@ export default function LoginPage({ onLogin }) {
 
         <form onSubmit={handleLoginSubmit}>
           <div className="form-group">
-            <label className="form-label">Username:</label>
+            <label className="form-label">Username / Email / Faculty ID:</label>
             <div style={{ position: 'relative' }}>
               <User size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }} />
               <input
                 type="text"
                 className="form-input"
                 style={{ paddingLeft: '2.75rem' }}
+                placeholder="Enter your username, email or faculty ID"
                 value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                required
+                onChange={(e) => { setUsername(e.target.value); setFieldErrors(f => ({ ...f, username: '' })); }}
+                autoComplete="username"
               />
             </div>
+            {fieldErrors.username && <span style={{ color: 'var(--accent-danger, #ef4444)', fontSize: '0.75rem', marginTop: '0.25rem', display: 'block' }}>{fieldErrors.username}</span>}
           </div>
 
-          <div className="form-group" style={{ marginBottom: '1.4rem' }}>
+          <div className="form-group" style={{ marginBottom: '0.8rem' }}>
             <label className="form-label">Password:</label>
             <div style={{ position: 'relative' }}>
               <Lock size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }} />
               <input
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 className="form-input"
-                style={{ paddingLeft: '2.75rem' }}
+                style={{ paddingLeft: '2.75rem', paddingRight: '2.75rem' }}
+                placeholder="Enter your password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
+                onChange={(e) => { setPassword(e.target.value); setFieldErrors(f => ({ ...f, password: '' })); }}
+                autoComplete="current-password"
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                style={{ position: 'absolute', right: '0.75rem', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', padding: '0.2rem', display: 'flex' }}
+                tabIndex={-1}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
             </div>
+            {fieldErrors.password && <span style={{ color: 'var(--accent-danger, #ef4444)', fontSize: '0.75rem', marginTop: '0.25rem', display: 'block' }}>{fieldErrors.password}</span>}
+          </div>
+
+          {/* Remember Me + Forgot Password row */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.4rem', fontSize: '0.8rem' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', color: 'var(--text-muted)' }}>
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                style={{ accentColor: 'var(--accent-primary, #dc2626)' }}
+              />
+              Remember me
+            </label>
+            <span
+              style={{ color: 'var(--text-dim)', cursor: 'pointer', textDecoration: 'underline' }}
+              title="Contact your system administrator to reset your password"
+              onClick={() => alert('Please contact your system administrator to reset your password.\n\nEmail: admin@easwari.edu.in')}
+            >
+              Forgot password?
+            </span>
           </div>
 
           <button type="submit" className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', padding: '0.9rem', fontSize: '0.95rem' }} disabled={loading}>
-            {loading ? 'Authenticating…' : <>Sign In <ArrowRight size={16} /></>}
+            {loading ? <><Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> Authenticating…</> : <>Sign In <ArrowRight size={16} /></>}
           </button>
         </form>
 
@@ -172,95 +226,33 @@ export default function LoginPage({ onLogin }) {
               type="button"
               className="btn btn-secondary"
               style={{ fontSize: '0.75rem', padding: '0.4rem 0.8rem', border: '1px solid rgba(168, 85, 247, 0.4)', background: 'rgba(168, 85, 247, 0.1)' }}
-              onClick={() => { setUsername('admin'); setPassword('admin123'); }}
+              onClick={() => { setUsername('admin'); setPassword('admin123'); setSelectedRole('ROLE_ADMIN'); }}
             >
-              👑 Admin (admin / admin123)
+              👑 Admin
             </button>
             <button
               type="button"
               className="btn btn-secondary"
               style={{ fontSize: '0.75rem', padding: '0.4rem 0.8rem', border: '1px solid rgba(192, 132, 252, 0.4)', background: 'rgba(192, 132, 252, 0.1)' }}
-              onClick={() => { setUsername('faculty'); setPassword('faculty123'); }}
+              onClick={() => { setUsername('faculty'); setPassword('faculty123'); setSelectedRole('ROLE_FACULTY'); }}
             >
-              🎓 Faculty (faculty / faculty123)
+              🎓 Faculty
             </button>
           </div>
         </div>
 
-        <div style={{ marginTop: '1rem', textAlign: 'center' }}>
+        <div style={{ marginTop: '1rem', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+          <Link to="/signup" style={{ color: 'var(--accent-primary, #dc2626)', fontSize: '0.82rem', textDecoration: 'none', fontWeight: 600 }}>
+            Don't have an account? Create an account →
+          </Link>
           <Link to="/" style={{ color: 'var(--text-dim)', fontSize: '0.82rem', textDecoration: 'none' }}>
             ← Back to Landing Page
           </Link>
         </div>
       </div>
 
-      {/* Personal Details Confirmation Modal */}
-      {showPersonalDetails && (
-        <div className="modal-overlay">
-          <div className="modal-card">
-            <div className="modal-header">
-              <div>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.2rem 0.6rem', borderRadius: '4px', background: 'rgba(168,85,247,0.2)', color: '#c084fc', fontSize: '0.73rem', fontWeight: 700, marginBottom: '0.45rem' }}>
-                  {pendingAuthData?.role === 'ROLE_ADMIN' ? '👑 Administrator' : '🎓 Faculty'}
-                </span>
-                <h2>Complete Your Profile</h2>
-                <p style={{ color: 'var(--text-dim)', fontSize: '0.83rem', marginTop: '0.2rem', fontWeight: 400 }}>Enter your contact details to continue.</p>
-              </div>
-            </div>
-
-            <form onSubmit={handlePersonalDetailsSubmit}>
-              <div className="modal-body">
-                {detailsError && (
-                  <div className="alert alert-danger">
-                    <AlertCircle size={16} /><span>{detailsError}</span>
-                  </div>
-                )}
-
-                <div className="form-group">
-                  <label className="form-label">Full Name *</label>
-                  <div style={{ position: 'relative' }}>
-                    <User size={16} style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }} />
-                    <input type="text" className="form-input" style={{ paddingLeft: '2.5rem' }} placeholder="e.g. Dr. Anjali Sharma" value={personalForm.fullName} onChange={e => setPersonalForm({ ...personalForm, fullName: e.target.value })} required />
-                  </div>
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Institutional Email *</label>
-                  <div style={{ position: 'relative' }}>
-                    <Mail size={16} style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }} />
-                    <input type="email" className="form-input" style={{ paddingLeft: '2.5rem' }} placeholder="e.g. anjali@college.edu" value={personalForm.email} onChange={e => setPersonalForm({ ...personalForm, email: e.target.value })} required />
-                  </div>
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Phone Number *</label>
-                  <div style={{ position: 'relative' }}>
-                    <Phone size={16} style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }} />
-                    <input type="tel" className="form-input" style={{ paddingLeft: '2.5rem' }} placeholder="e.g. +91 98765 43210" value={personalForm.phone} onChange={e => setPersonalForm({ ...personalForm, phone: e.target.value })} required />
-                  </div>
-                </div>
-
-                {pendingAuthData?.role === 'ROLE_FACULTY' && (
-                  <div className="form-group">
-                    <label className="form-label">Department *</label>
-                    <select className="form-select" value={personalForm.department} onChange={e => setPersonalForm({ ...personalForm, department: e.target.value })} required>
-                      <option value="">-- Select Department --</option>
-                      {INSTITUTIONAL_PROGRAMMES.map(prog => (
-                        <option key={prog} value={prog}>{prog}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-              </div>
-
-              <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setShowPersonalDetails(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary"><Check size={15} /> Confirm &amp; Enter Portal</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Spinner keyframe for the loading icon */}
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }

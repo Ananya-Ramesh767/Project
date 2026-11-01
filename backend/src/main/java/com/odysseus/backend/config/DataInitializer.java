@@ -15,10 +15,10 @@ import java.util.List;
  * Bootstraps the minimum required system configuration:
  * 1. Admin and Faculty login accounts (credentials only).
  * 2. Default NEP 2020 credit rule.
- * 3. Standard college timeslots (Mon–Fri, P1–P8 + BREAK + LUNCH).
+ * 3. Standard college timeslots (Monâ€“Fri, P1â€“P8 + BREAK + LUNCH).
  *
  * Everything else (rooms, batches, subjects, faculty, offerings, calendars)
- * is intentionally left empty — the administrator enters real institution data.
+ * is intentionally left empty â€” the administrator enters real institution data.
  */
 @Component
 @RequiredArgsConstructor
@@ -42,6 +42,8 @@ public class DataInitializer implements CommandLineRunner {
             stmt.execute("UPDATE batches SET department = 'Computer Science Engineering', batch_name = 'CSE-A' WHERE section = 'A' AND department = '[object Object]'");
             stmt.execute("UPDATE batches SET department = 'Computer Science Engineering', batch_name = 'CSE-B' WHERE section = 'B' AND department = '[object Object]'");
             stmt.execute("DELETE FROM batches WHERE department = '[object Object]'");
+            stmt.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS department VARCHAR(255)");
+            stmt.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(20)");
         } catch (Exception ignored) {
         }
     }
@@ -81,11 +83,11 @@ public class DataInitializer implements CommandLineRunner {
         }
     }
 
-    // ──────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // 5.  Default Academic Calendar
     //     Creates a placeholder active calendar so that Data Readiness passes
     //     on a fresh install. The admin can update / replace it via Year Calendar.
-    // ──────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private void seedDefaultAcademicCalendar() {
         if (calendarRepository.findByActiveTrue().isEmpty()) {
             calendarRepository.save(AcademicCalendar.builder()
@@ -101,9 +103,9 @@ public class DataInitializer implements CommandLineRunner {
     }
 
 
-    // ──────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // 1.  Login accounts
-    // ──────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private void seedUsers() {
         if (!userRepository.existsByUsername("admin")) {
             userRepository.save(User.builder()
@@ -123,14 +125,15 @@ public class DataInitializer implements CommandLineRunner {
                     .password(passwordEncoder.encode("faculty123"))
                     .role("ROLE_FACULTY")
                     .fullName("Faculty User")
+                    .department("Computer Science and Engineering")
                     .active(true)
                     .build());
         }
     }
 
-    // ──────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // 2.  NEP 2020 credit rule
-    // ──────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private void seedDefaultNepRule() {
         if (nepCreditRuleRepository.count() == 0) {
             nepCreditRuleRepository.save(NepCreditRule.builder()
@@ -145,34 +148,34 @@ public class DataInitializer implements CommandLineRunner {
         }
     }
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // 3.  Standard college timeslots  (Mon – Fri, 08:15 – 15:45)
-    // ──────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // 3.  Standard college timeslots  (Mon â€“ Fri, 08:15 â€“ 15:45)
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private void seedCollegeTimeslots() {
         if (timeslotRepository.count() > 0) return;
 
         List<String> days = List.of("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY");
 
         for (String day : days) {
-            // P1 08:15 – 09:05
+            // P1 08:15 â€“ 09:05
             save(day, 1, "P1", LocalTime.of(8, 15), LocalTime.of(9, 5), false, false);
-            // P2 09:05 – 09:55
+            // P2 09:05 â€“ 09:55
             save(day, 2, "P2", LocalTime.of(9, 5), LocalTime.of(9, 55), false, false);
-            // BREAK 09:55 – 10:10
+            // BREAK 09:55 â€“ 10:10
             save(day, 0, "BREAK", LocalTime.of(9, 55), LocalTime.of(10, 10), true, false);
-            // P3 10:10 – 11:00
+            // P3 10:10 â€“ 11:00
             save(day, 3, "P3", LocalTime.of(10, 10), LocalTime.of(11, 0), false, false);
-            // P4 11:00 – 11:50
+            // P4 11:00 â€“ 11:50
             save(day, 4, "P4", LocalTime.of(11, 0), LocalTime.of(11, 50), false, false);
-            // P5 11:50 – 12:40
+            // P5 11:50 â€“ 12:40
             save(day, 5, "P5", LocalTime.of(11, 50), LocalTime.of(12, 40), false, false);
-            // LUNCH 12:40 – 13:30
+            // LUNCH 12:40 â€“ 13:30
             save(day, 0, "LUNCH", LocalTime.of(12, 40), LocalTime.of(13, 30), false, true);
-            // P6 13:30 – 14:15
+            // P6 13:30 â€“ 14:15
             save(day, 6, "P6", LocalTime.of(13, 30), LocalTime.of(14, 15), false, false);
-            // P7 14:15 – 15:00
+            // P7 14:15 â€“ 15:00
             save(day, 7, "P7", LocalTime.of(14, 15), LocalTime.of(15, 0), false, false);
-            // P8 15:00 – 15:45
+            // P8 15:00 â€“ 15:45
             save(day, 8, "P8", LocalTime.of(15, 0), LocalTime.of(15, 45), false, false);
         }
     }
@@ -187,9 +190,9 @@ public class DataInitializer implements CommandLineRunner {
                 .build());
     }
 
-    // ──────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // 4.  Official Government of India Gazetted Holidays (2025, 2026, 2027)
-    // ──────────────────────────────────────────────────────────────────────────
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private void seedGovernmentHolidays() {
         // 2026 Central Government Holidays
         addGovtHoliday("2026-01-26", "Republic Day", "National Holiday");

@@ -1,17 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Clock, Calendar, Layers, ShieldCheck, AlertCircle, CheckCircle2, 
-  Plus, Trash2, RefreshCw, Eye, BookOpen, Users, DoorOpen, Sparkles, 
-  BarChart2, ArrowRightLeft, History, RotateCcw, Download
+  Trash2, RefreshCw, Eye, BookOpen, Users, DoorOpen, Sparkles, 
+  BarChart2, ArrowRightLeft, History, Download, Filter
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import Modal from '../components/Modal';
+import { INSTITUTIONAL_PROGRAMMES } from '../utils/programmes';
+import { SEMESTER_OPTIONS, getStoredAcademicContext, setStoredAcademicContext } from '../utils/academicContext';
 
 export default function SectionTimetablePage({ user }) {
   const [batches, setBatches] = useState([]);
-  const [selectedBatchId, setSelectedBatchId] = useState(null);
-  const [timetable, setTimetable] = useState([]);
+  const [allAssignments, setAllAssignments] = useState([]);
   const [subjects, setSubjects] = useState([]);
   const [faculty, setFaculty] = useState([]);
   const [rooms, setRooms] = useState([]);
@@ -19,18 +20,24 @@ export default function SectionTimetablePage({ user }) {
   const [message, setMessage] = useState(null);
   const [activeTab, setActiveTab] = useState('grid'); // 'grid' | 'monitoring' | 'room-history'
 
-  // Conflict Checker Modal State
-  const [showModal, setShowModal] = useState(false);
-  const [validationResult, setValidationResult] = useState(null);
-  const [validating, setValidating] = useState(false);
-  const [formData, setFormData] = useState({
-    subjectId: '',
-    facultyId: '',
-    roomId: '',
-    dayOfWeek: 'MONDAY',
-    periodNumber: 1,
-    durationPeriods: 1
-  });
+  // Scope filter state
+  const initialContext = getStoredAcademicContext();
+  const [departmentFilter, setDepartmentFilter] = useState(() => initialContext.department || 'ALL');
+  const [semesterFilter, setSemesterFilter] = useState(() => initialContext.semester || 'ALL');
+
+  useEffect(() => {
+    const handleContextChange = (e) => {
+      const ctx = e.detail || getStoredAcademicContext();
+      setDepartmentFilter(ctx.department || 'ALL');
+      setSemesterFilter(ctx.semester || 'ALL');
+    };
+    window.addEventListener('academicContextChanged', handleContextChange);
+    window.addEventListener('storage', handleContextChange);
+    return () => {
+      window.removeEventListener('academicContextChanged', handleContextChange);
+      window.removeEventListener('storage', handleContextChange);
+    };
+  }, []);
 
   // Room Relocation Modal State
   const [showRoomModal, setShowRoomModal] = useState(false);
@@ -61,55 +68,72 @@ export default function SectionTimetablePage({ user }) {
     fetchInitialData();
   }, []);
 
-  useEffect(() => {
-    if (selectedBatchId) {
-      fetchTimetable(selectedBatchId);
-      fetchRoomHistory(selectedBatchId);
-    }
-  }, [selectedBatchId]);
-
   const fetchInitialData = async () => {
+    setLoading(true);
     try {
-      const headers = { 'Authorization': `Bearer ${user?.token}` };
-      const [bRes, sRes, fRes, rRes] = await Promise.all([
-        fetch('/api/admin/batches', { headers }),
-        fetch('/api/admin/subjects', { headers }),
-        fetch('/api/admin/faculty', { headers }),
-        fetch('/api/admin/rooms', { headers })
-      ]);
+      const headers = user?.token ? { 'Authorization': `Bearer ${user.token}` } : {};
+      const isFacultyUser = user?.role === 'ROLE_FACULTY';
 
-      const [bData, sData, fData, rData] = await Promise.all([
-        bRes.ok ? bRes.json() : [],
-        sRes.ok ? sRes.json() : [],
-        fRes.ok ? fRes.json() : [],
-        rRes.ok ? rRes.json() : []
-      ]);
+      if (isFacultyUser) {
+        // Faculty: fetch only own timetable assignments from token-based endpoint
+        const [ttRes, mySubRes] = await Promise.all([
+          fetch('/api/faculty/my-timetable', { headers }),
+          fetch('/api/faculty/my-subjects', { headers })
+        ]);
+        const assignments = ttRes.ok ? await ttRes.json() : [];
+        const mySubjects = mySubRes.ok ? await mySubRes.json() : [];
 
-      setBatches(bData);
-      setSubjects(sData);
-      setFaculty(fData);
-      setRooms(rData);
+        // Build synthetic batch list from assignments (unique batches this faculty teaches)
+        const batchMap = {};
+        assignments.forEach(a => {
+          if (a.batch && !batchMap[a.batch.id]) batchMap[a.batch.id] = a.batch;
+        });
+        setBatches(Object.values(batchMap));
+        setAllAssignments(assignments);
+        setSubjects(mySubjects.map(o => o.subject).filter(Boolean));
+        setFaculty([]);
+        setRooms([]);
+      } else {
+        // Admin: full data access
+        const [bRes, aRes, sRes, fRes, rRes] = await Promise.all([
+          fetch('/api/admin/batches', { headers }),
+          fetch('/api/timetable', { headers }),
+          fetch('/api/admin/subjects', { headers }),
+          fetch('/api/admin/faculty', { headers }),
+          fetch('/api/admin/rooms', { headers })
+        ]);
 
-      if (bData.length > 0) {
-        setSelectedBatchId(bData[0].id);
+        const [bData, aData, sData, fData, rData] = await Promise.all([
+          bRes.ok ? bRes.json() : [],
+          aRes.ok ? aRes.json() : [],
+          sRes.ok ? sRes.json() : [],
+          fRes.ok ? fRes.json() : [],
+          rRes.ok ? rRes.json() : []
+        ]);
+
+        setBatches(bData);
+        setAllAssignments(aData);
+        setSubjects(sData);
+        setFaculty(fData);
+        setRooms(rData);
       }
     } catch (err) {
       console.error('Error loading master data:', err);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const fetchTimetable = async (batchId) => {
+  const refreshTimetables = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/timetable/batch/${batchId}`, {
-        headers: { 'Authorization': `Bearer ${user?.token}` }
-      });
+      const headers = user?.token ? { 'Authorization': `Bearer ${user.token}` } : {};
+      const res = await fetch('/api/timetable', { headers });
       if (res.ok) {
-        const data = await res.json();
-        setTimetable(data);
+        setAllAssignments(await res.json());
       }
-    } catch (err) {
-      console.error('Error loading timetable:', err);
+    } catch (e) {
+      console.error(e);
     } finally {
       setLoading(false);
     }
@@ -117,9 +141,8 @@ export default function SectionTimetablePage({ user }) {
 
   const fetchRoomHistory = async (batchId) => {
     try {
-      const res = await fetch(`/api/timetable/room-history/${batchId}`, {
-        headers: { 'Authorization': `Bearer ${user?.token}` }
-      });
+      const headers = user?.token ? { 'Authorization': `Bearer ${user.token}` } : {};
+      const res = await fetch(`/api/timetable/room-history/${batchId || 1}`, { headers });
       if (res.ok) {
         setRoomHistory(await res.json());
       }
@@ -131,9 +154,8 @@ export default function SectionTimetablePage({ user }) {
   const fetchLessonPlanOverview = async () => {
     setLoadingOverview(true);
     try {
-      const res = await fetch('/api/lesson-plan/admin/overview', {
-        headers: { 'Authorization': `Bearer ${user?.token}` }
-      });
+      const headers = user?.token ? { 'Authorization': `Bearer ${user.token}` } : {};
+      const res = await fetch('/api/lesson-plan/admin/overview', { headers });
       if (res.ok) {
         setLessonPlanOverview(await res.json());
       }
@@ -144,81 +166,16 @@ export default function SectionTimetablePage({ user }) {
     }
   };
 
-  const handleValidate = async () => {
-    setValidating(true);
-    setValidationResult(null);
-    try {
-      const payload = {
-        batch: { id: selectedBatchId },
-        subject: { id: parseInt(formData.subjectId) },
-        faculty: { id: parseInt(formData.facultyId) },
-        room: { id: parseInt(formData.roomId) },
-        dayOfWeek: formData.dayOfWeek,
-        periodNumber: parseInt(formData.periodNumber),
-        durationPeriods: parseInt(formData.durationPeriods)
-      };
-
-      const res = await fetch('/api/timetable/validate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${user?.token}`
-        },
-        body: JSON.stringify(payload)
-      });
-      const data = await res.json();
-      setValidationResult(data);
-    } catch (err) {
-      setValidationResult({ valid: false, message: 'Validation request failed: ' + err.message });
-    } finally {
-      setValidating(false);
-    }
-  };
-
-  const handleSaveAssignment = async () => {
-    try {
-      const payload = {
-        batch: { id: selectedBatchId },
-        subject: { id: parseInt(formData.subjectId) },
-        faculty: { id: parseInt(formData.facultyId) },
-        room: { id: parseInt(formData.roomId) },
-        dayOfWeek: formData.dayOfWeek,
-        periodNumber: parseInt(formData.periodNumber),
-        durationPeriods: parseInt(formData.durationPeriods)
-      };
-
-      const res = await fetch('/api/timetable/assignment', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${user?.token}`
-        },
-        body: JSON.stringify(payload)
-      });
-
-      if (res.ok) {
-        setMessage({ type: 'success', text: 'Class successfully added to schedule.' });
-        setShowModal(false);
-        fetchTimetable(selectedBatchId);
-      } else {
-        const err = await res.json();
-        setValidationResult(err);
-      }
-    } catch (err) {
-      setMessage({ type: 'error', text: 'Save failed: ' + err.message });
-    }
-  };
-
   const handleDeleteAssignment = async (id) => {
     if (!window.confirm('Remove this assignment from the timetable?')) return;
     try {
       const res = await fetch(`/api/timetable/assignment/${id}`, {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${user?.token}` }
+        headers: user?.token ? { 'Authorization': `Bearer ${user.token}` } : {}
       });
       if (res.ok) {
         setMessage({ type: 'success', text: 'Assignment removed.' });
-        fetchTimetable(selectedBatchId);
+        refreshTimetables();
       }
     } catch (err) {
       setMessage({ type: 'error', text: 'Delete failed.' });
@@ -232,7 +189,7 @@ export default function SectionTimetablePage({ user }) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${user?.token}`
+          ...(user?.token ? { 'Authorization': `Bearer ${user.token}` } : {})
         },
         body: JSON.stringify({
           assignmentId: selectedAssignment.id,
@@ -248,8 +205,7 @@ export default function SectionTimetablePage({ user }) {
         setSelectedAssignment(null);
         setNewRoomId('');
         setRoomChangeReason('');
-        fetchTimetable(selectedBatchId);
-        fetchRoomHistory(selectedBatchId);
+        refreshTimetables();
       } else {
         setMessage({ type: 'error', text: data.error || 'Failed to change room' });
       }
@@ -258,87 +214,120 @@ export default function SectionTimetablePage({ user }) {
     }
   };
 
-  const handleRestoreRoom = async (historyId) => {
-    try {
-      const res = await fetch('/api/timetable/restore-room', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${user?.token}`
-        },
-        body: JSON.stringify({ historyId })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setMessage({ type: 'success', text: data.message });
-        fetchTimetable(selectedBatchId);
-        fetchRoomHistory(selectedBatchId);
-      }
-    } catch (err) {
-      setMessage({ type: 'error', text: 'Restore failed.' });
+  // Bluish-Green (Teal) Theme Tokens derived at render time (ignoring any colors stored in DB)
+  const TIMETABLE_TOKENS = {
+    THEORY: {
+      type: 'THEORY',
+      label: 'THEORY',
+      fill: 'var(--tt-theory-fill, rgba(20, 184, 166, 0.15))',
+      border: 'var(--tt-theory-border, #14b8a6)',
+      text: 'var(--tt-theory-text, #99f6e4)',
+      chipBg: 'var(--tt-theory-chip-bg, rgba(20, 184, 166, 0.25))',
+      chipText: '#99f6e4',
+      pdfFill: [230, 250, 248],
+      pdfText: [15, 118, 110]
+    },
+    LAB: {
+      type: 'LAB',
+      label: 'LAB',
+      fill: 'var(--tt-lab-fill, rgba(6, 182, 212, 0.18))',
+      border: 'var(--tt-lab-border, #06b6d4)',
+      text: 'var(--tt-lab-text, #a5f3fc)',
+      chipBg: 'var(--tt-lab-chip-bg, rgba(6, 182, 212, 0.25))',
+      chipText: '#a5f3fc',
+      pdfFill: [225, 248, 252],
+      pdfText: [14, 116, 144]
+    },
+    SPECIAL: {
+      type: 'SPECIAL',
+      label: 'SPECIAL',
+      fill: 'var(--tt-special-fill, rgba(45, 212, 191, 0.12))',
+      border: 'var(--tt-special-border, #2dd4bf)',
+      text: 'var(--tt-special-text, #ccfbf1)',
+      chipBg: 'var(--tt-special-chip-bg, rgba(45, 212, 191, 0.25))',
+      chipText: '#ccfbf1',
+      pdfFill: [235, 252, 250],
+      pdfText: [17, 94, 89]
+    },
+    LIBRARY: {
+      type: 'LIBRARY',
+      label: 'LIBRARY',
+      fill: 'var(--tt-library-fill, rgba(16, 185, 129, 0.15))',
+      border: 'var(--tt-library-border, #10b981)',
+      text: 'var(--tt-library-text, #a7f3d0)',
+      chipBg: 'var(--tt-library-chip-bg, rgba(16, 185, 129, 0.25))',
+      chipText: '#a7f3d0',
+      pdfFill: [236, 253, 245],
+      pdfText: [6, 95, 70]
+    },
+    FREE: {
+      type: 'FREE',
+      label: 'FREE',
+      fill: 'var(--tt-free-fill, rgba(20, 184, 166, 0.03))',
+      border: 'var(--tt-free-border, rgba(20, 184, 166, 0.35))',
+      text: 'var(--tt-free-text, #5eead4)',
+      pdfFill: [255, 255, 255],
+      pdfText: [148, 163, 184]
+    },
+    BREAK: {
+      type: 'BREAK',
+      label: 'BREAK',
+      fill: 'var(--tt-break-fill, rgba(51, 65, 85, 0.35))',
+      border: 'var(--tt-break-border, rgba(100, 116, 139, 0.3))',
+      text: 'var(--tt-break-text, #94a3b8)',
+      pdfFill: [241, 245, 249],
+      pdfText: [100, 116, 139]
     }
   };
 
-  // Find slot for day and period
-  const getAssignmentAt = (day, periodNum) => {
-    return timetable.find(a => {
-      if (a.dayOfWeek !== day) return false;
-      const start = a.periodNumber;
-      const duration = a.durationPeriods || 1;
-      return periodNum >= start && periodNum < start + duration;
+  const getPeriodTheme = (assignment) => {
+    if (!assignment) return TIMETABLE_TOKENS.FREE;
+    const act = (assignment.activityType || '').toUpperCase().trim();
+    const sess = (assignment.sessionType || '').toUpperCase().trim();
+    const subType = (assignment.subject?.subjectType || '').toUpperCase().trim();
+    const code = (assignment.subject?.subjectCode || '').toUpperCase().trim();
+    const name = (assignment.subject?.subjectName || '').toUpperCase().trim();
+
+    // 1. Library or common non-teaching period
+    if (act === 'COMMON' || act === 'LIBRARY' || sess === 'COMMON' || sess === 'LIBRARY'
+        || subType === 'COMMON' || subType === 'NON_TEACHING' || subType === 'LIBRARY'
+        || code.includes('LIB') || name.includes('LIBRARY') || name.includes('MENTORING') || name.includes('SPORTS')) {
+      return TIMETABLE_TOKENS.LIBRARY;
+    }
+
+    // 2. Lab or practical session
+    if (assignment.isLabBlock || sess === 'LAB' || act === 'LAB' || subType === 'LAB' || subType === 'PRACTICAL') {
+      return TIMETABLE_TOKENS.LAB;
+    }
+
+    // 3. Special institutional activities (AT, TT, LC, COUN, NPTEL, CSD)
+    if (sess === 'SPECIAL' || ['CAREER_SKILL_DEVELOPMENT', 'LEETCODE', 'APTITUDE', 'TECHNICAL_TEST', 'COUNSELLING', 'NPTEL'].includes(act)
+        || subType === 'SPECIAL' || code.includes('APT') || code.includes('TEC') || code.includes('LEE') || code.includes('COU') || code.includes('NPT') || code.includes('SDA')) {
+      return TIMETABLE_TOKENS.SPECIAL;
+    }
+
+    // 4. Regular theory
+    return TIMETABLE_TOKENS.THEORY;
+  };
+
+  const getSectionStats = (batchAssignments) => {
+    let scheduledPeriods = 0;
+    (batchAssignments || []).forEach(a => {
+      scheduledPeriods += (a.durationPeriods || 1);
     });
+    const totalAvailable = 40; // 5 days * 8 teaching slots
+    const freePeriods = Math.max(0, totalAvailable - scheduledPeriods);
+    return { scheduledPeriods, freePeriods, assignmentCount: (batchAssignments || []).length };
   };
-
-  // Activity badge styling
-  const getActivityMeta = (assignment) => {
-    const act = assignment.activityType || (assignment.subject?.requiresLab ? 'LAB' : 'ACADEMIC');
-    switch (act.toUpperCase()) {
-      case 'LAB':
-        return { bg: 'rgba(16, 185, 129, 0.2)', border: '#10b981', color: '#6ee7b7', label: 'LAB' };
-      case 'CAREER_SKILL_DEVELOPMENT':
-        return { bg: 'rgba(168, 85, 247, 0.25)', border: '#c084fc', color: '#e9d5ff', label: 'CAREER SKILLS (2H)' };
-      case 'LEETCODE':
-        return { bg: 'rgba(59, 130, 246, 0.2)', border: '#3b82f6', color: '#93c5fd', label: 'LEETCODE' };
-      case 'APTITUDE':
-        return { bg: 'rgba(245, 158, 11, 0.2)', border: '#f59e0b', color: '#fcd34d', label: 'APTITUDE' };
-      case 'TECHNICAL_TEST':
-        return { bg: 'rgba(239, 68, 68, 0.2)', border: '#ef4444', color: '#fca5a5', label: 'TECH TEST' };
-      case 'COUNSELLING':
-        return { bg: 'rgba(236, 72, 153, 0.2)', border: '#ec4899', color: '#fbcfe8', label: 'COUNSELLING' };
-      case 'NPTEL':
-        return { bg: 'rgba(6, 182, 212, 0.2)', border: '#06b6d4', color: '#a5f3fc', label: 'NPTEL' };
-      case 'FREE':
-        return { bg: 'rgba(107, 114, 128, 0.2)', border: '#6b7280', color: '#d1d5db', label: 'FREE' };
-      default:
-        return { bg: 'rgba(139, 92, 246, 0.2)', border: '#8b5cf6', color: '#ddd6fe', label: 'ACADEMIC' };
-    }
-  };
-
-  // Hours calculation
-  const totalWeeklyPeriods = 40;
-  const academicPeriods = timetable.filter(a => !a.activityType || a.activityType === 'ACADEMIC' || a.activityType === 'LAB')
-    .reduce((sum, a) => sum + (a.durationPeriods || 1), 0);
-  const specialPeriods = timetable.filter(a => a.activityType && a.activityType !== 'ACADEMIC' && a.activityType !== 'LAB' && a.activityType !== 'FREE')
-    .reduce((sum, a) => sum + (a.durationPeriods || 1), 0);
-  const freePeriods = Math.max(0, totalWeeklyPeriods - academicPeriods - specialPeriods);
-
-  // Faculty-specific logic: identify the logged-in faculty's assignments
-  const isFaculty = user?.role === 'ROLE_FACULTY';
-  const myFacultyName = isFaculty ? (user.fullName || user.username) : null;
-  const isMyAssignment = (assignment) => {
-    if (!isFaculty || !assignment) return false;
-    const fName = assignment.faculty?.name || '';
-    return myFacultyName && fName.toLowerCase().trim() === myFacultyName.toLowerCase().trim();
-  };
-  const myPeriods = isFaculty ? timetable.filter(a => isMyAssignment(a)) : [];
 
   const getSubjectDisplayName = (assignment) => {
-    if (!assignment) return '—';
+    if (!assignment) return 'Free';
     const code = (assignment.subject?.subjectCode || assignment.activityType || '').toUpperCase().trim();
     const subName = (assignment.subject?.subjectName || '').toUpperCase().trim();
     const isLab = assignment.sessionType === 'LAB' || assignment.isLabBlock || assignment.activityType === 'LAB' || (assignment.subject?.subjectType === 'LAB');
 
-    // Canonical short codes matching Easwari Engineering College Timetable format
+    // Canonical short codes matching Easwari Reference Timetable format
+    if (code.includes('LIB') || subName.includes('LIBRARY')) return 'Library';
     if (code.includes('CSS301') || code === 'ESD' || subName.includes('EMBEDDED')) return isLab ? 'ESD LAB' : 'ESD';
     if (code.includes('CSC301') || code === 'CN' || subName.includes('NETWORKS')) return isLab ? 'CN LAB' : 'CN';
     if (code.includes('MAB301') || code === 'DM' || subName.includes('DISCRETE')) {
@@ -358,147 +347,87 @@ export default function SectionTimetablePage({ user }) {
       let name = assignment.subject.subjectName.trim();
       return isLab && !name.toLowerCase().includes('lab') ? `${name} Lab` : name;
     }
-    return assignment.activityType || 'FREE';
+    return assignment.activityType || 'Free';
   };
 
-  const formatCellForPdf = (assignment) => {
-    if (!assignment) return '—';
-    return getSubjectDisplayName(assignment);
-  };
-
-  const downloadSectionPdf = () => {
-    const currentBatch = batches.find(b => b.id === selectedBatchId);
-    if (!currentBatch) return;
-
-    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-
-    // Header Banner
-    doc.setFillColor(30, 41, 59);
-    doc.rect(0, 0, 297, 24, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(15);
-    doc.setFont('helvetica', 'bold');
-    doc.text('EASWARI ENGINEERING COLLEGE — ACADEMIC TIMETABLE SYSTEM', 14, 11);
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Official Academic Timetable — Section ${currentBatch.section} (${currentBatch.batchName})`, 14, 18);
-
-    // Meta Row
-    doc.setTextColor(30, 41, 59);
-    doc.setFontSize(9);
-    doc.text(`Department: ${currentBatch.department || 'Engineering'}`, 14, 30);
-    doc.text(`Semester: Sem ${currentBatch.semester || '3'}`, 95, 30);
-    doc.text(`Academic Year: ${currentBatch.academicYear || '2026-2027'}`, 160, 30);
-    doc.text(`Classroom: ${currentBatch.assignedRoomCode || 'TBD'} (${currentBatch.assignedBlockName || 'Academic Block'} Flr ${currentBatch.assignedFloorNumber || 1})`, 220, 30);
-
-    const head = [[
-      'Day',
-      'P1\n08:15-09:05',
-      'P2\n09:05-09:55',
-      'Break\n09:55-10:10',
-      'P3\n10:10-11:00',
-      'P4\n11:00-11:50',
-      'P5\n11:50-12:40',
-      'Lunch\n12:40-13:30',
-      'P6\n13:30-14:15',
-      'P7\n14:15-15:00',
-      'P8\n15:00-15:45'
-    ]];
-
-    const body = days.map(day => [
-      day,
-      formatCellForPdf(getAssignmentAt(day, 1)),
-      formatCellForPdf(getAssignmentAt(day, 2)),
-      'MORNING\nBREAK',
-      formatCellForPdf(getAssignmentAt(day, 3)),
-      formatCellForPdf(getAssignmentAt(day, 4)),
-      formatCellForPdf(getAssignmentAt(day, 5)),
-      'LUNCH\nBREAK',
-      formatCellForPdf(getAssignmentAt(day, 6)),
-      formatCellForPdf(getAssignmentAt(day, 7)),
-      formatCellForPdf(getAssignmentAt(day, 8))
-    ]);
-
-    autoTable(doc, {
-      startY: 34,
-      head: head,
-      body: body,
-      theme: 'grid',
-      styles: { fontSize: 7, halign: 'center', valign: 'middle', cellPadding: 2, minCellHeight: 18 },
-      headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7.5 },
-      alternateRowStyles: { fillColor: [248, 250, 252] },
-      columnStyles: {
-        0: { fontStyle: 'bold', halign: 'left', cellWidth: 22 },
-        3: { fillColor: [241, 245, 249], fontStyle: 'italic', cellWidth: 15 },
-        7: { fillColor: [241, 245, 249], fontStyle: 'italic', cellWidth: 15 }
-      }
+  const getAssignmentAt = (batchAssignments, day, periodNum) => {
+    return batchAssignments.find(a => {
+      if (a.dayOfWeek !== day) return false;
+      const start = a.periodNumber;
+      const duration = a.durationPeriods || 1;
+      return periodNum >= start && periodNum < start + duration;
     });
-
-    const pageCount = doc.internal.getNumberOfPages();
-    for (let i = 1; i <= pageCount; i++) {
-      doc.setPage(i);
-      doc.setFontSize(8);
-      doc.setTextColor(148, 163, 184);
-      doc.text(`Generated by Easwari Engineering College — Academic Management & Smart Timetable Scheduler`, 14, 202);
-      doc.text(`Page ${i} of ${pageCount}`, 265, 202);
-    }
-
-    const cleanDept = (currentBatch.department || 'CSE').replace(/[^a-zA-Z0-9]/g, '_');
-    doc.save(`Timetable_${cleanDept}_Sem${currentBatch.semester}_Sec${currentBatch.section}.pdf`);
   };
 
-  const downloadDepartmentPdf = async () => {
-    const currentBatch = batches.find(b => b.id === selectedBatchId);
-    if (!currentBatch) return;
+  // Faculty-specific logic: identify the logged-in faculty's assignments
+  const isFaculty = user?.role === 'ROLE_FACULTY';
+  const myFacultyName = isFaculty ? (user.fullName || user.username) : null;
+  const isMyAssignment = (assignment) => {
+    if (!isFaculty || !assignment) return true; // Admins view all assignments
+    const fName = assignment.faculty?.name || '';
+    const fEmail = assignment.faculty?.email || '';
+    const userEmail = user?.email || '';
+    if (fEmail && userEmail && fEmail.toLowerCase() === userEmail.toLowerCase()) return true;
+    return myFacultyName && fName.toLowerCase().trim() === myFacultyName.toLowerCase().trim();
+  };
 
-    const deptBatches = batches.filter(b => b.department === currentBatch.department && b.semester === currentBatch.semester);
-    if (deptBatches.length === 0) return;
+  // Filter batches by selected department & semester
+  const filteredBatches = useMemo(() => {
+    return batches.filter(b => {
+      if (departmentFilter && departmentFilter !== 'ALL') {
+        const bDept = (b.department || '').toLowerCase();
+        const sDept = departmentFilter.toLowerCase();
+        if (!bDept.includes(sDept) && !sDept.includes(bDept)) return false;
+      }
+      if (semesterFilter && semesterFilter !== 'ALL') {
+        if (String(b.semester) !== String(semesterFilter)) return false;
+      }
+      return true;
+    });
+  }, [batches, departmentFilter, semesterFilter]);
 
-    setMessage({ type: 'success', text: `Generating complete timetable PDF for ${deptBatches.length} sections in ${currentBatch.department} Sem ${currentBatch.semester}…` });
+  // Group filtered batches by Department and Semester
+  const groupedBatches = useMemo(() => {
+    const groups = {};
+    filteredBatches.forEach(b => {
+      const key = `${b.department || 'Department'} — Semester ${b.semester || 'N/A'}`;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(b);
+    });
+    // Sort sections within each group: Section A, Section B, Section C...
+    Object.values(groups).forEach(list => {
+      list.sort((a, b) => (a.section || a.batchName || '').localeCompare(b.section || b.batchName || ''));
+    });
+    return groups;
+  }, [filteredBatches]);
 
+  const downloadAllPdf = () => {
+    if (filteredBatches.length === 0) return;
     const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
 
-    for (let bIdx = 0; bIdx < deptBatches.length; bIdx++) {
-      const b = deptBatches[bIdx];
-      if (bIdx > 0) doc.addPage();
+    filteredBatches.forEach((b, idx) => {
+      if (idx > 0) doc.addPage();
+      const batchAssignments = allAssignments.filter(a => a.batch && a.batch.id === b.id);
+      const stats = getSectionStats(batchAssignments);
 
-      let bTimetable = [];
-      try {
-        const res = await fetch(`/api/timetable/batch/${b.id}`, {
-          headers: { 'Authorization': `Bearer ${user?.token}` }
-        });
-        if (res.ok) bTimetable = await res.json();
-      } catch (err) {
-        console.warn('Could not fetch timetable for batch', b.id, err);
-      }
-
-      const getBatchSlot = (day, periodNum) => {
-        return bTimetable.find(a => {
-          if (a.dayOfWeek !== day) return false;
-          const start = a.periodNumber;
-          const duration = a.durationPeriods || 1;
-          return periodNum >= start && periodNum < start + duration;
-        });
-      };
-
-      // Header Banner
-      doc.setFillColor(30, 41, 59);
+      // Header Banner — Teal bluish-green family
+      doc.setFillColor(15, 118, 110); // #0f766e
       doc.rect(0, 0, 297, 24, 'F');
       doc.setTextColor(255, 255, 255);
-      doc.setFontSize(15);
+      doc.setFontSize(14);
       doc.setFont('helvetica', 'bold');
       doc.text('EASWARI ENGINEERING COLLEGE — ACADEMIC TIMETABLE SYSTEM', 14, 11);
       doc.setFontSize(10);
       doc.setFont('helvetica', 'normal');
-      doc.text(`Official Academic Timetable — Section ${b.section} (${b.batchName})`, 14, 18);
+      doc.text(`Official Academic Timetable — Section ${b.section || b.batchName} (${b.batchName})`, 14, 18);
 
-      // Meta Row
+      // Section metadata banner
       doc.setTextColor(30, 41, 59);
       doc.setFontSize(9);
-      doc.text(`Department: ${b.department || 'Engineering'}`, 14, 30);
-      doc.text(`Semester: Sem ${b.semester || '3'}`, 95, 30);
-      doc.text(`Academic Year: ${b.academicYear || '2026-2027'}`, 160, 30);
-      doc.text(`Classroom: ${b.assignedRoomCode || 'TBD'} (${b.assignedBlockName || 'Academic Block'} Flr ${b.assignedFloorNumber || 1})`, 220, 30);
+      doc.text(`Department: ${b.department || 'Engineering'}`, 14, 29);
+      doc.text(`Semester: Sem ${b.semester || '3'}`, 85, 29);
+      doc.text(`Classroom: ${b.assignedRoomCode || 'TBD'} (${b.assignedBlockName || 'Academic Block'} Flr ${b.assignedFloorNumber || 1})`, 135, 29);
+      doc.text(`Status: ${stats.scheduledPeriods} Scheduled Periods • ${stats.freePeriods} Free Periods`, 215, 29);
 
       const head = [[
         'Day',
@@ -514,158 +443,155 @@ export default function SectionTimetablePage({ user }) {
         'P8\n15:00-15:45'
       ]];
 
+      const getPdfCell = (day, pNum) => {
+        const assignment = getAssignmentAt(batchAssignments, day, pNum);
+        if (!assignment) return 'Free';
+        const name = getSubjectDisplayName(assignment);
+        const code = assignment.subject?.subjectCode ? `(${assignment.subject.subjectCode})` : '';
+        const room = assignment.room?.roomCode ? `[${assignment.room.roomCode}]` : '';
+        const fac = assignment.faculty?.name || '';
+        const meta = [room, fac].filter(Boolean).join(' • ');
+        return [name, code, meta].filter(Boolean).join('\n');
+      };
+
       const body = days.map(day => [
         day,
-        formatCellForPdf(getBatchSlot(day, 1)),
-        formatCellForPdf(getBatchSlot(day, 2)),
+        getPdfCell(day, 1),
+        getPdfCell(day, 2),
         'MORNING\nBREAK',
-        formatCellForPdf(getBatchSlot(day, 3)),
-        formatCellForPdf(getBatchSlot(day, 4)),
-        formatCellForPdf(getBatchSlot(day, 5)),
+        getPdfCell(day, 3),
+        getPdfCell(day, 4),
+        getPdfCell(day, 5),
         'LUNCH\nBREAK',
-        formatCellForPdf(getBatchSlot(day, 6)),
-        formatCellForPdf(getBatchSlot(day, 7)),
-        formatCellForPdf(getBatchSlot(day, 8))
+        getPdfCell(day, 6),
+        getPdfCell(day, 7),
+        getPdfCell(day, 8)
       ]);
 
+      const colToPeriod = { 1: 1, 2: 2, 4: 3, 5: 4, 6: 5, 8: 6, 9: 7, 10: 8 };
+
       autoTable(doc, {
-        startY: 34,
+        startY: 33,
         head: head,
         body: body,
         theme: 'grid',
-        styles: { fontSize: 7, halign: 'center', valign: 'middle', cellPadding: 2, minCellHeight: 18 },
-        headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 7.5 },
-        alternateRowStyles: { fillColor: [248, 250, 252] },
+        styles: {
+          fontSize: 6.5,
+          halign: 'center',
+          valign: 'middle',
+          cellPadding: 1.5,
+          minCellHeight: 18,
+          lineColor: [20, 184, 166],
+          lineWidth: 0.15
+        },
+        headStyles: {
+          fillColor: [15, 118, 110], // Teal header
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
+          fontSize: 7.5,
+          lineColor: [13, 148, 136],
+          lineWidth: 0.2
+        },
         columnStyles: {
-          0: { fontStyle: 'bold', halign: 'left', cellWidth: 22 },
-          3: { fillColor: [241, 245, 249], fontStyle: 'italic', cellWidth: 15 },
-          7: { fillColor: [241, 245, 249], fontStyle: 'italic', cellWidth: 15 }
+          0: { fontStyle: 'bold', halign: 'left', cellWidth: 20, fillColor: [241, 245, 249], textColor: [15, 23, 42] },
+          3: { fillColor: [241, 245, 249], textColor: [100, 116, 139], fontStyle: 'italic', cellWidth: 15 },
+          7: { fillColor: [241, 245, 249], textColor: [100, 116, 139], fontStyle: 'italic', cellWidth: 15 }
+        },
+        didParseCell: function(data) {
+          if (data.section === 'body') {
+            const col = data.column.index;
+            if (col in colToPeriod) {
+              const pNum = colToPeriod[col];
+              const day = days[data.row.index];
+              const assignment = getAssignmentAt(batchAssignments, day, pNum);
+              const theme = getPeriodTheme(assignment);
+              data.cell.styles.fillColor = theme.pdfFill;
+              data.cell.styles.textColor = theme.pdfText;
+              if (!assignment) {
+                data.cell.styles.fontStyle = 'italic';
+              } else {
+                data.cell.styles.fontStyle = 'bold';
+              }
+            }
+          }
         }
       });
-    }
+    });
 
     const pageCount = doc.internal.getNumberOfPages();
     for (let i = 1; i <= pageCount; i++) {
       doc.setPage(i);
       doc.setFontSize(8);
-      doc.setTextColor(148, 163, 184);
+      doc.setTextColor(100, 116, 139);
       doc.text(`Generated by Easwari Engineering College — Academic Management & Smart Timetable Scheduler`, 14, 202);
       doc.text(`Section ${i} of ${pageCount}`, 265, 202);
     }
 
-    const cleanDept = (currentBatch.department || 'CSE').replace(/[^a-zA-Z0-9]/g, '_');
-    doc.save(`Timetable_${cleanDept}_Sem${currentBatch.semester}_All_Sections.pdf`);
-    setMessage({ type: 'success', text: `Downloaded complete PDF for all ${deptBatches.length} sections.` });
+    doc.save(`Timetables_All_Sections.pdf`);
+    setMessage({ type: 'success', text: `Downloaded PDF for all ${filteredBatches.length} sections.` });
   };
-
-  const currentBatch = batches.find(b => b.id === selectedBatchId) || batches[0];
-  const assignedTheoryRoom = (currentBatch?.assignedRoomCode && rooms.find(r => r.roomCode === currentBatch.assignedRoomCode))
-    || timetable.find(t => t.room && t.sessionType === 'THEORY')?.room
-    || timetable.find(t => t.room && t.room.roomType !== 'LAB')?.room
-    || null;
-
-  const assignedLabRooms = React.useMemo(() => {
-    const map = new Map();
-    timetable.forEach(t => {
-      if (t.room && (t.sessionType === 'LAB' || t.room.roomType === 'LAB')) {
-        if (!map.has(t.room.roomCode)) {
-          map.set(t.room.roomCode, {
-            room: t.room,
-            subject: t.subject?.subjectName || t.subject?.subjectCode || 'Laboratory Practical'
-          });
-        }
-      }
-    });
-    return Array.from(map.values());
-  }, [timetable]);
 
   return (
     <div>
-      {/* Top Header & Section Selector */}
+      {/* Top Header & Scope Controls */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <h1 style={{ fontSize: '1.75rem', fontWeight: 800, background: 'linear-gradient(to right, #ffffff, #c084fc)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-            Section Timetables & Monitoring
+            {isFaculty ? 'My Timetable' : 'Multi-Section Timetables'}
           </h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '0.25rem' }}>
-            NEP-2020 Multi-Period Constraint Timetables with Break-Aware Lab Blocks & Live Relocation
+            {isFaculty ? 'Your assigned teaching slots across all sections — read-only.' : 'All sections stacked by department and semester with continuous lab blocks & synchronized special periods'}
           </p>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Layers size={18} style={{ color: 'var(--accent-primary)' }} />
+        {/* Global Scope Selector (Replaces single-section selector) */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'var(--bg-secondary)', padding: '0.35rem 0.75rem', borderRadius: '8px', border: '1px solid var(--border-accent)' }}>
+            <Filter size={15} style={{ color: 'var(--accent-primary)' }} />
             <select
-              value={selectedBatchId || ''}
-              onChange={(e) => setSelectedBatchId(Number(e.target.value))}
-              style={{
-                background: 'var(--bg-secondary)',
-                color: 'var(--text-main)',
-                border: '1px solid var(--border-accent)',
-                borderRadius: '8px',
-                padding: '0.5rem 1rem',
-                fontSize: '0.92rem',
-                fontWeight: 700,
-                outline: 'none',
-                cursor: 'pointer'
+              value={departmentFilter}
+              onChange={(e) => {
+                setDepartmentFilter(e.target.value);
+                setStoredAcademicContext({ department: e.target.value });
               }}
+              style={{ background: 'transparent', color: 'var(--text-main)', border: 'none', fontSize: '0.86rem', fontWeight: 600, outline: 'none', cursor: 'pointer' }}
             >
-              {batches.map(b => (
-                <option key={b.id} value={b.id}>
-                  {b.department} — Sem {b.semester} — Section {b.section || b.batchName} ({b.strength || 60} students)
-                </option>
-              ))}
+              <option value="ALL">All Departments</option>
+              {INSTITUTIONAL_PROGRAMMES.map(p => <option key={p} value={p}>{p}</option>)}
             </select>
           </div>
 
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <button
-              onClick={downloadSectionPdf}
-              className="btn btn-secondary"
-              style={{ padding: '0.45rem 0.85rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.4rem', border: '1px solid rgba(99,102,241,0.4)', background: 'rgba(99,102,241,0.15)', color: '#a5b4fc' }}
-              title="Download official printable PDF for this section"
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'var(--bg-secondary)', padding: '0.35rem 0.75rem', borderRadius: '8px', border: '1px solid var(--border-accent)' }}>
+            <select
+              value={semesterFilter}
+              onChange={(e) => {
+                setSemesterFilter(e.target.value);
+                setStoredAcademicContext({ semester: e.target.value });
+              }}
+              style={{ background: 'transparent', color: 'var(--text-main)', border: 'none', fontSize: '0.86rem', fontWeight: 600, outline: 'none', cursor: 'pointer' }}
             >
-              <Download size={15} /> Section PDF
-            </button>
-            <button
-              onClick={downloadDepartmentPdf}
-              className="btn btn-secondary"
-              style={{ padding: '0.45rem 0.85rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
-              title="Download all sections of this department and semester as a multi-page PDF"
-            >
-              <Download size={15} /> Dept &amp; Sem PDF
-            </button>
-            <button
-              onClick={() => { setActiveTab('grid'); }}
-              className={`btn ${activeTab === 'grid' ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ padding: '0.45rem 0.85rem', fontSize: '0.85rem' }}
-            >
-              <Clock size={16} /> Timetable Grid
-            </button>
-            <button
-              onClick={() => { setActiveTab('room-history'); fetchRoomHistory(selectedBatchId); }}
-              className={`btn ${activeTab === 'room-history' ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ padding: '0.45rem 0.85rem', fontSize: '0.85rem' }}
-            >
-              <History size={16} /> Room History ({roomHistory.length})
-            </button>
-            <button
-              onClick={() => { setActiveTab('monitoring'); fetchLessonPlanOverview(); }}
-              className={`btn ${activeTab === 'monitoring' ? 'btn-primary' : 'btn-secondary'}`}
-              style={{ padding: '0.45rem 0.85rem', fontSize: '0.85rem' }}
-            >
-              <BarChart2 size={16} /> Lesson Plan Tracking
-            </button>
-            {user?.role === 'ROLE_ADMIN' && (
-              <button
-                onClick={() => { setShowModal(true); setValidationResult(null); }}
-                className="btn btn-secondary"
-                style={{ padding: '0.45rem 0.85rem', fontSize: '0.85rem' }}
-              >
-                <Plus size={16} /> Test / Add Slot
-              </button>
-            )}
+              <option value="ALL">All Semesters</option>
+              {SEMESTER_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+            </select>
           </div>
+
+          <button
+            onClick={downloadAllPdf}
+            className="btn btn-secondary"
+            style={{ padding: '0.45rem 0.85rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.4rem', border: '1px solid rgba(99,102,241,0.4)', background: 'rgba(99,102,241,0.15)', color: '#a5b4fc' }}
+            title="Download multi-section timetable PDF"
+          >
+            <Download size={15} /> Export PDF
+          </button>
+
+          <button
+            onClick={refreshTimetables}
+            className="btn btn-secondary"
+            style={{ padding: '0.45rem 0.75rem', fontSize: '0.85rem' }}
+            title="Refresh from server"
+          >
+            <RefreshCw size={15} />
+          </button>
         </div>
       </div>
 
@@ -673,575 +599,353 @@ export default function SectionTimetablePage({ user }) {
         <div style={{
           padding: '0.75rem 1rem',
           borderRadius: '8px',
-          marginBottom: '1rem',
-          background: message.type === 'success' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-          border: `1px solid ${message.type === 'success' ? '#10b981' : '#ef4444'}`,
+          marginBottom: '1.5rem',
+          background: message.type === 'success' ? 'rgba(52, 211, 153, 0.15)' : 'rgba(248, 113, 113, 0.15)',
+          border: `1px solid ${message.type === 'success' ? '#34d399' : '#f87171'}`,
           color: message.type === 'success' ? '#6ee7b7' : '#fca5a5',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between'
+          fontSize: '0.88rem'
         }}>
-          <span>{message.text}</span>
-          <button onClick={() => setMessage(null)} style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer' }}>&times;</button>
+          {message.text}
         </div>
       )}
 
-      {/* Assigned Classrooms at the Top (Requirement 25) */}
-      <div className="glass-panel" style={{ padding: '1.25rem 1.5rem', marginBottom: '1.5rem', borderLeft: '4px solid #10b981' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-            <DoorOpen size={20} style={{ color: '#10b981' }} />
-            <div>
-              <h2 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--text-main)' }}>
-                Assigned Classrooms &amp; Laboratories — Section {currentBatch?.section || currentBatch?.batchName || 'A'}
+      {/* Stacked Timetable Grids */}
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: '4rem', color: 'var(--text-muted)' }}>
+          <Clock size={36} style={{ animation: 'spin 1.5s linear infinite', margin: '0 auto 1rem', display: 'block', color: 'var(--accent-primary)' }} />
+          Loading timetables for all sections...
+        </div>
+      ) : Object.keys(groupedBatches).length === 0 ? (
+        <div className="glass-panel" style={{ padding: '3rem', textAlign: 'center' }}>
+          <Clock size={40} style={{ color: 'var(--text-dim)', marginBottom: '0.75rem' }} />
+          <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>No Sections Found for Selected Scope</div>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
+            Adjust the department or semester filter, or generate a timetable in Generate Timetable.
+          </p>
+        </div>
+      ) : (
+        Object.entries(groupedBatches).map(([groupTitle, sectionBatches]) => (
+          <div key={groupTitle} style={{ marginBottom: '2.5rem' }}>
+            {/* Department & Semester Group Heading */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.75rem',
+              padding: '0.75rem 1.25rem',
+              background: 'linear-gradient(90deg, rgba(99, 102, 241, 0.18), rgba(168, 85, 247, 0.08))',
+              borderLeft: '4px solid var(--accent-primary)',
+              borderRadius: '8px',
+              marginBottom: '1.5rem'
+            }}>
+              <Calendar size={20} style={{ color: 'var(--accent-primary)' }} />
+              <h2 style={{ fontSize: '1.25rem', fontWeight: 800, margin: 0, color: '#ffffff' }}>
+                {groupTitle}
               </h2>
-              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                {currentBatch?.department || 'CSE'} &bull; Semester {currentBatch?.semester || 3} &bull; Strength: {currentBatch?.strength || 60} Students (Max 70 limit)
+              <span className="badge badge-success" style={{ marginLeft: 'auto', fontSize: '0.78rem' }}>
+                {sectionBatches.length} Section{sectionBatches.length > 1 ? 's' : ''} Stacked
               </span>
             </div>
-          </div>
-          <span className={`badge ${assignedTheoryRoom ? 'badge-success' : 'badge-warning'}`}>
-            {assignedTheoryRoom ? 'Classroom Allocated' : 'Allocation Pending'}
-          </span>
-        </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem' }}>
-          {/* Primary Lecture Room */}
-          <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', padding: '0.85rem' }}>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 700, textTransform: 'uppercase', marginBottom: '0.35rem' }}>
-              Primary Classroom (Lecture / Theory)
-            </div>
-            {assignedTheoryRoom ? (
-              <div>
-                <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#10b981' }}>
-                  {assignedTheoryRoom.roomCode}
-                </div>
-                <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-main)', marginTop: '2px' }}>
-                  {assignedTheoryRoom.roomName || assignedTheoryRoom.roomCode}
-                </div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                  {assignedTheoryRoom.blockName || 'Main Block'} &bull; Floor {assignedTheoryRoom.floorNumber ?? 1}
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Capacity:</span>
-                  <span style={{ fontSize: '0.8rem', fontWeight: 700, color: (assignedTheoryRoom.capacity >= (currentBatch?.strength || 0)) ? '#34d399' : '#f87171' }}>
-                    {assignedTheoryRoom.capacity} seats ({assignedTheoryRoom.capacity >= (currentBatch?.strength || 0) ? 'Adequate' : 'Under Capacity'})
-                  </span>
-                </div>
-              </div>
-            ) : (
-              <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', padding: '0.5rem 0' }}>
-                No theory classroom allocated yet.
-              </div>
-            )}
-          </div>
+            {/* Stacked Grids: One per Section */}
+            {sectionBatches.map(batch => {
+              const batchAssignments = allAssignments.filter(a => a.batch && a.batch.id === batch.id);
+              const stats = getSectionStats(batchAssignments);
 
-          {/* Assigned Labs */}
-          {assignedLabRooms.length > 0 ? (
-            assignedLabRooms.map((l, li) => (
-              <div key={li} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', padding: '0.85rem' }}>
-                <div style={{ fontSize: '0.75rem', color: '#38bdf8', fontWeight: 700, textTransform: 'uppercase', marginBottom: '0.35rem' }}>
-                  Laboratory Practical Space
-                </div>
-                <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#38bdf8' }}>
-                  {l.room.roomCode}
-                </div>
-                <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-main)', marginTop: '2px' }}>
-                  {l.subject}
-                </div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                  {l.room.blockName || 'Lab Complex'} &bull; Floor {l.room.floorNumber ?? 0}
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Lab Capacity:</span>
-                  <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#38bdf8' }}>
-                    {l.room.capacity} workstations
-                  </span>
-                </div>
-              </div>
-            ))
-          ) : (
-            <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px dashed rgba(255,255,255,0.08)', borderRadius: '8px', padding: '0.85rem', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 700, textTransform: 'uppercase' }}>
-                Laboratory Assignments
-              </div>
-              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.35rem 0 0 0' }}>
-                Subject labs (Chemistry, Physics, Computer Labs) are scheduled as designated periods in the weekly timetable.
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Summary Metrics Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
-        <div className="glass-panel" style={{ padding: '1rem' }}>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>TOTAL WEEKLY HOURS</div>
-          <div style={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--text-main)', marginTop: '0.25rem' }}>{totalWeeklyPeriods} hrs</div>
-          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>40 Periods / Week (8 x 5)</div>
-        </div>
-
-        <div className="glass-panel" style={{ padding: '1rem' }}>
-          <div style={{ fontSize: '0.75rem', color: '#c084fc', fontWeight: 600 }}>ACADEMIC HOURS</div>
-          <div style={{ fontSize: '1.6rem', fontWeight: 800, color: '#c084fc', marginTop: '0.25rem' }}>{academicPeriods} hrs</div>
-          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Required: 33 Academic Hours</div>
-        </div>
-
-        <div className="glass-panel" style={{ padding: '1rem' }}>
-          <div style={{ fontSize: '0.75rem', color: '#38bdf8', fontWeight: 600 }}>SPECIAL ACTIVITIES</div>
-          <div style={{ fontSize: '1.6rem', fontWeight: 800, color: '#38bdf8', marginTop: '0.25rem' }}>{specialPeriods} hrs</div>
-          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Career Skills, LeetCode, Aptitude</div>
-        </div>
-
-        <div className="glass-panel" style={{ padding: '1rem' }}>
-          <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>FREE / LIBRARY</div>
-          <div style={{ fontSize: '1.6rem', fontWeight: 800, color: '#94a3b8', marginTop: '0.25rem' }}>{freePeriods} hrs</div>
-          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Unallocated / Self-Study</div>
-        </div>
-
-        <div className="glass-panel" style={{ padding: '1rem' }}>
-          <div style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: 600 }}>ALLOCATED CLASSROOM</div>
-          <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#10b981', marginTop: '0.25rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {timetable.find(t => t.room && t.sessionType === 'THEORY')?.room?.roomCode || timetable.find(t => t.room)?.room?.roomCode || 'Pending Solve'}
-          </div>
-          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-            {(() => {
-              const r = timetable.find(t => t.room && t.sessionType === 'THEORY')?.room || timetable.find(t => t.room)?.room;
-              return r ? `${r.blockName || 'Block'} • Floor ${r.floorNumber || 1}` : 'No allocation yet';
-            })()}
-          </div>
-        </div>
-      </div>
-
-      {/* Main Tab Views */}
-      {activeTab === 'grid' && (
-        <div className="glass-panel" style={{ padding: '1.5rem', overflowX: 'auto' }}>
-          {loading ? (
-            <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>Loading section timetable...</div>
-          ) : timetable.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '3rem' }}>
-              <Clock size={40} style={{ color: 'var(--text-dim)', marginBottom: '0.75rem' }} />
-              <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>No Timetable Published Yet</div>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
-                Use the Timetable Generator to create an authoritative schedule for this section.
-              </p>
-            </div>
-          ) : (
-            <>
-              {/* Faculty-mode banner: show only when ROLE_FACULTY is logged in */}
-              {isFaculty && (
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: '0.75rem',
-                  background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.35)',
-                  borderRadius: '8px', padding: '0.75rem 1rem', marginBottom: '1rem', flexWrap: 'wrap'
-                }}>
-                  <Eye size={16} style={{ color: '#fbbf24', flexShrink: 0 }} />
-                  <span style={{ fontSize: '0.85rem', color: '#fcd34d', fontWeight: 700 }}>Faculty View</span>
-                  <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
-                    Showing timetable for <strong style={{ color: 'var(--text-main)' }}>{batches.find(b => b.id === selectedBatchId)?.batchName}</strong>.
-                    Your assigned classes ({myPeriods.length} period{myPeriods.length !== 1 ? 's' : ''} this week) are highlighted in gold.
-                    All data is live from the same source as the admin view.
-                  </span>
-                </div>
-              )}
-            <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: '6px', minWidth: '900px' }}>
-              <thead>
-                <tr>
-                  <th style={{ padding: '0.75rem', background: 'var(--bg-secondary)', borderRadius: '6px', color: 'var(--text-muted)', fontSize: '0.8rem', width: '110px' }}>
-                    DAY / PERIOD
-                  </th>
-                  {periods.map((p, i) => (
-                    <th key={i} style={{
-                      padding: '0.6rem',
-                      background: p.isBreak || p.isLunch ? 'rgba(255, 255, 255, 0.03)' : 'var(--bg-secondary)',
-                      borderRadius: '6px',
-                      textAlign: 'center',
-                      border: p.isBreak || p.isLunch ? '1px dashed rgba(255, 255, 255, 0.1)' : 'none'
-                    }}>
-                      <div style={{ fontSize: '0.85rem', fontWeight: 800, color: p.isBreak || p.isLunch ? 'var(--accent-warning)' : 'var(--text-main)' }}>
-                        {p.label}
-                      </div>
-                      <div style={{ fontSize: '0.65rem', color: 'var(--text-dim)', marginTop: '2px' }}>{p.time}</div>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {days.map(day => (
-                  <tr key={day}>
-                    <td style={{
-                      padding: '0.8rem',
-                      background: 'var(--bg-secondary)',
-                      borderRadius: '6px',
-                      fontWeight: 800,
-                      fontSize: '0.85rem',
-                      color: 'var(--text-muted)'
-                    }}>
-                      {day}
-                    </td>
-
-                    {periods.map((period, pIdx) => {
-                      if (period.isBreak || period.isLunch) {
-                        return (
-                          <td key={pIdx} style={{
-                            textAlign: 'center',
-                            background: 'rgba(255, 255, 255, 0.02)',
-                            borderRadius: '6px',
-                            color: 'var(--text-dim)',
-                            fontSize: '0.7rem',
-                            letterSpacing: '0.08em',
-                            fontWeight: 700,
-                            verticalAlign: 'middle'
-                          }}>
-                            {period.label}
-                          </td>
-                        );
-                      }
-
-                      const assignment = getAssignmentAt(day, period.num);
-
-                      if (!assignment) {
-                        return (
-                          <td key={pIdx} style={{
-                            background: 'rgba(255, 255, 255, 0.015)',
-                            borderRadius: '6px',
-                            textAlign: 'center',
-                            color: 'var(--text-dim)',
-                            fontSize: '0.75rem',
-                            padding: '0.5rem'
-                          }}>
-                            &mdash;
-                          </td>
-                        );
-                      }
-
-                      // If continuous block, only render cell at start of block
-                      if (assignment.periodNumber !== period.num) {
-                        return null; // Spanned by previous cell
-                      }
-
-                       const meta = getActivityMeta(assignment);
-                      const colSpan = assignment.durationPeriods > 1 ? assignment.durationPeriods : 1;
-                      const isMe = isMyAssignment(assignment);
-                      const displayName = getSubjectDisplayName(assignment);
-                      const cellTooltip = `Subject: ${displayName}${assignment.subject?.subjectCode ? ` [${assignment.subject.subjectCode}]` : ''}\nFaculty: ${assignment.faculty?.name || 'Assigned'}\nRoom: ${assignment.room?.roomCode || 'TBD'} (${assignment.room?.blockName || 'Block'} - Floor ${assignment.room?.floorNumber || 1})`;
-
-                      return (
-                        <td
-                          key={pIdx}
-                          colSpan={colSpan}
-                          title={cellTooltip}
-                          style={{
-                            padding: '0.65rem 0.5rem',
-                            borderRadius: '8px',
-                            background: isMe ? 'rgba(251,191,36,0.18)' : meta.bg,
-                            border: isMe ? '2px solid #fbbf24' : `1px solid ${meta.border}`,
-                            verticalAlign: 'middle',
-                            position: 'relative',
-                            textAlign: 'center',
-                            minHeight: '56px',
-                            cursor: 'default'
-                          }}
-                        >
-                          {user?.role === 'ROLE_ADMIN' && (
-                            <div style={{ position: 'absolute', top: '4px', right: '4px', display: 'flex', gap: '3px', opacity: 0.7 }}>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelectedAssignment(assignment);
-                                  setNewRoomId(assignment.room?.id?.toString() || '');
-                                  setShowRoomModal(true);
-                                }}
-                                title="Change classroom"
-                                style={{ background: 'transparent', border: 'none', color: meta.color, cursor: 'pointer', padding: 0 }}
-                              >
-                                <ArrowRightLeft size={11} />
-                              </button>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDeleteAssignment(assignment.id);
-                                }}
-                                title="Delete slot"
-                                style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', padding: 0 }}
-                              >
-                                <Trash2 size={11} />
-                              </button>
-                            </div>
-                          )}
-
-                          <div style={{
-                            fontWeight: 700,
-                            fontSize: '0.86rem',
-                            color: isMe ? '#fcd34d' : 'var(--text-main)',
-                            lineHeight: 1.35,
-                            wordBreak: 'break-word',
-                            padding: '0.2rem'
-                          }}>
-                            {displayName}
-                          </div>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </>
-          )}
-        </div>
-      )}
-
-      {/* Classroom Change History Tab */}
-      {activeTab === 'room-history' && (
-        <div className="glass-panel" style={{ padding: '1.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <h3 style={{ fontSize: '1.1rem', fontWeight: 800 }}>Classroom Change & Relocation Log</h3>
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-              Maintains full audit history of relocations with instant restore capability
-            </span>
-          </div>
-
-          {roomHistory.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '2.5rem', color: 'var(--text-dim)' }}>
-              No classroom change history recorded for this section.
-            </div>
-          ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Subject</th>
-                  <th>Original Room</th>
-                  <th>Relocated Room</th>
-                  <th>Reason</th>
-                  <th>Changed By</th>
-                  <th>Timestamp</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {roomHistory.map(h => (
-                  <tr key={h.id}>
-                    <td style={{ fontWeight: 700 }}>{h.subject?.subjectCode} - {h.subject?.subjectName}</td>
-                    <td><span className="badge" style={{ background: 'rgba(255, 255, 255, 0.08)' }}>{h.originalRoom?.roomCode}</span></td>
-                    <td><span className="badge" style={{ background: 'rgba(168, 85, 247, 0.2)', color: '#c084fc' }}>{h.newRoom?.roomCode}</span></td>
-                    <td style={{ color: 'var(--text-muted)' }}>{h.reason}</td>
-                    <td>{h.changedBy || 'Admin'}</td>
-                    <td style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>{h.timestamp ? new Date(h.timestamp).toLocaleString() : 'N/A'}</td>
-                    <td>
-                      {h.active ? (
-                        <button
-                          onClick={() => handleRestoreRoom(h.id)}
-                          className="btn btn-secondary"
-                          style={{ padding: '0.3rem 0.65rem', fontSize: '0.75rem', gap: '4px' }}
-                        >
-                          <RotateCcw size={13} /> Restore Usual
-                        </button>
-                      ) : (
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Restored</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
-
-      {/* Lesson Plan Monitoring Tab */}
-      {activeTab === 'monitoring' && (
-        <div className="glass-panel" style={{ padding: '1.5rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-            <h3 style={{ fontSize: '1.1rem', fontWeight: 800 }}>Department Lesson Plan Delivery & Progress</h3>
-            <button onClick={fetchLessonPlanOverview} className="btn btn-secondary" style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}>
-              <RefreshCw size={14} /> Refresh Metrics
-            </button>
-          </div>
-
-          {loadingOverview ? (
-            <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>Computing syllabus coverage...</div>
-          ) : lessonPlanOverview.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-dim)' }}>
-              No active lesson plans generated yet. Use the Lesson Plan module to upload syllabi and generate schedules.
-            </div>
-          ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem' }}>
-              {lessonPlanOverview.map((item, idx) => (
-                <div key={idx} className="glass-panel" style={{ padding: '1.25rem', background: 'rgba(255, 255, 255, 0.02)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <div>
-                      <span className="badge" style={{ background: 'var(--border-accent)', color: 'var(--text-main)', marginBottom: '0.4rem' }}>
-                        {item.batchName}
+              return (
+                <div key={batch.id} className="glass-panel" style={{ padding: '1.5rem', marginBottom: '2rem', overflowX: 'auto' }}>
+                  {/* Section Title Bar */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <span style={{
+                        padding: '0.3rem 0.75rem',
+                        background: 'rgba(20, 184, 166, 0.15)',
+                        border: '1px solid rgba(20, 184, 166, 0.4)',
+                        borderRadius: '6px',
+                        fontWeight: 800,
+                        fontSize: '0.95rem',
+                        color: '#99f6e4'
+                      }}>
+                        Section {batch.section || batch.batchName}
                       </span>
-                      <h4 style={{ fontWeight: 800, fontSize: '0.95rem' }}>{item.subjectCode}</h4>
-                      <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{item.subjectName}</p>
+                      <span style={{ fontWeight: 700, fontSize: '1.05rem', color: 'var(--text-main)' }}>
+                        {batch.batchName}
+                      </span>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        ({batch.strength || 60} Students)
+                      </span>
                     </div>
-                    <span style={{ fontSize: '1.2rem', fontWeight: 800, color: item.completionPercentage >= 75 ? '#34d399' : '#fbbf24' }}>
-                      {item.completionPercentage}%
-                    </span>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.82rem', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
+                      <span>
+                        <strong style={{ color: '#10b981' }}>Dedicated Classroom:</strong> {batch.assignedRoomCode || 'TBD'}
+                        {batch.assignedBlockName && ` (${batch.assignedBlockName} Flr ${batch.assignedFloorNumber || 1})`}
+                      </span>
+                      <span className="badge" style={{
+                        background: 'rgba(20, 184, 166, 0.15)',
+                        border: '1px solid rgba(20, 184, 166, 0.4)',
+                        color: '#99f6e4',
+                        fontWeight: 700
+                      }}>
+                        {batchAssignments.length > 0 ? `${batchAssignments.length} Assignments (${stats.scheduledPeriods} Periods)` : 'No Assignments'}
+                      </span>
+                      {stats.freePeriods > 0 && (
+                        <span className="badge" style={{
+                          background: 'rgba(20, 184, 166, 0.06)',
+                          border: '1px dashed rgba(20, 184, 166, 0.4)',
+                          color: '#5eead4',
+                          fontWeight: 600
+                        }}>
+                          {stats.freePeriods} free periods this week
+                        </span>
+                      )}
+                    </div>
                   </div>
 
-                  {/* Progress Bar */}
-                  <div style={{ height: '6px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '3px', margin: '0.85rem 0', overflow: 'hidden' }}>
-                    <div style={{ width: `${item.completionPercentage}%`, height: '100%', background: 'linear-gradient(90deg, #8b5cf6, #38bdf8)', borderRadius: '3px' }} />
-                  </div>
+                  {batchAssignments.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                      No timetable generated for this section yet.
+                    </div>
+                  ) : (
+                    <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: '6px', minWidth: '950px' }}>
+                      <thead>
+                        <tr>
+                          <th style={{ padding: '0.75rem', background: 'var(--bg-secondary)', borderRadius: '6px', color: 'var(--text-muted)', fontSize: '0.8rem', width: '110px' }}>
+                            DAY / PERIOD
+                          </th>
+                          {periods.map((p, i) => (
+                            <th key={i} style={{
+                              padding: '0.6rem',
+                              background: p.isBreak || p.isLunch ? 'rgba(51, 65, 85, 0.25)' : 'var(--bg-secondary)',
+                              borderRadius: '6px',
+                              textAlign: 'center',
+                              border: p.isBreak || p.isLunch ? '1px dashed rgba(100, 116, 139, 0.25)' : 'none'
+                            }}>
+                              <div style={{ fontSize: '0.85rem', fontWeight: 800, color: p.isBreak || p.isLunch ? '#94a3b8' : 'var(--text-main)' }}>
+                                {p.label}
+                              </div>
+                              <div style={{ fontSize: '0.65rem', color: 'var(--text-dim)', marginTop: '2px' }}>{p.time}</div>
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {days.map(day => (
+                          <tr key={day}>
+                            <td style={{
+                              padding: '0.8rem',
+                              background: 'var(--bg-secondary)',
+                              borderRadius: '6px',
+                              fontWeight: 800,
+                              fontSize: '0.85rem',
+                              color: 'var(--text-muted)'
+                            }}>
+                              {day}
+                            </td>
 
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-                    <span>Faculty: {item.facultyName}</span>
-                    <span>Completed: {item.completedSessions} / {item.totalSessions} sessions</span>
-                  </div>
+                            {periods.map((period, pIdx) => {
+                              if (period.isBreak || period.isLunch) {
+                                return (
+                                  <td key={pIdx} style={{
+                                    textAlign: 'center',
+                                    background: 'rgba(51, 65, 85, 0.25)',
+                                    border: '1px dashed rgba(100, 116, 139, 0.25)',
+                                    borderRadius: '6px',
+                                    color: '#94a3b8',
+                                    fontSize: '0.7rem',
+                                    letterSpacing: '0.08em',
+                                    fontWeight: 700,
+                                    verticalAlign: 'middle'
+                                  }}>
+                                    {period.label}
+                                  </td>
+                                );
+                              }
+
+                              const assignment = getAssignmentAt(batchAssignments, day, period.num);
+
+                              if (!assignment) {
+                                return (
+                                  <td key={pIdx} style={{
+                                    background: 'var(--tt-free-fill, rgba(20, 184, 166, 0.03))',
+                                    border: '1px dashed var(--tt-free-border, rgba(20, 184, 166, 0.35))',
+                                    borderRadius: '8px',
+                                    textAlign: 'center',
+                                    color: 'var(--tt-free-text, #5eead4)',
+                                    fontSize: '0.78rem',
+                                    fontWeight: 600,
+                                    letterSpacing: '0.04em',
+                                    padding: '0.65rem 0.5rem',
+                                    verticalAlign: 'middle'
+                                  }}>
+                                    Free
+                                  </td>
+                                );
+                              }
+
+                              // Spanning check: if this slot is covered by a multi-period block starting earlier, skip
+                              if (assignment.periodNumber !== period.num) {
+                                return null;
+                              }
+
+                              const colSpan = assignment.durationPeriods > 1 ? assignment.durationPeriods : 1;
+                              const token = getPeriodTheme(assignment);
+                              const displayName = getSubjectDisplayName(assignment);
+                              const subCode = assignment.subject?.subjectCode || '';
+                              const facultyName = assignment.faculty?.name || 'Unassigned';
+                              const roomCode = assignment.room?.roomCode || 'TBD';
+
+                              return (
+                                <td
+                                  key={pIdx}
+                                  colSpan={colSpan}
+                                  style={{
+                                    padding: '0.65rem 0.5rem',
+                                    borderRadius: '8px',
+                                    background: token.fill,
+                                    border: `1px solid ${token.border}`,
+                                    verticalAlign: 'middle',
+                                    position: 'relative',
+                                    textAlign: 'center',
+                                    minHeight: '60px',
+                                    cursor: 'default',
+                                    boxShadow: '0 2px 4px rgba(0, 0, 0, 0.15)'
+                                  }}
+                                >
+                                  {user?.role === 'ROLE_ADMIN' && (
+                                    <div style={{ position: 'absolute', top: '4px', right: '4px', display: 'flex', gap: '3px', opacity: 0.7 }}>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setSelectedAssignment(assignment);
+                                          setNewRoomId(assignment.room?.id?.toString() || '');
+                                          setShowRoomModal(true);
+                                        }}
+                                        title="Change classroom"
+                                        style={{ background: 'transparent', border: 'none', color: token.border, cursor: 'pointer', padding: 0 }}
+                                      >
+                                        <ArrowRightLeft size={11} />
+                                      </button>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleDeleteAssignment(assignment.id);
+                                        }}
+                                        title="Delete slot"
+                                        style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', padding: 0 }}
+                                      >
+                                        <Trash2 size={11} />
+                                      </button>
+                                    </div>
+                                  )}
+
+                                  {/* Subject Title (Bold) & Code */}
+                                  <div style={{
+                                    fontWeight: 800,
+                                    fontSize: '0.86rem',
+                                    color: token.text,
+                                    lineHeight: 1.3
+                                  }}>
+                                    {displayName}
+                                    {subCode && subCode !== displayName && (
+                                      <span style={{ fontSize: '0.68rem', color: token.text, opacity: 0.75, marginLeft: '4px', fontWeight: 500 }}>
+                                        ({subCode})
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {/* Faculty Name (Smaller, readable) */}
+                                  <div style={{
+                                    fontSize: '0.7rem',
+                                    color: '#cbd5e1',
+                                    marginTop: '2px',
+                                    whiteSpace: 'nowrap',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis'
+                                  }}>
+                                    {facultyName}
+                                  </div>
+
+                                  {/* Room Code & Category Chip */}
+                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px', marginTop: '4px', flexWrap: 'wrap' }}>
+                                    <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 600 }}>
+                                      {roomCode}
+                                    </span>
+                                    <span style={{
+                                      fontSize: '0.6rem',
+                                      fontWeight: 800,
+                                      letterSpacing: '0.04em',
+                                      padding: '1px 5px',
+                                      borderRadius: '4px',
+                                      background: token.chipBg,
+                                      border: `1px solid ${token.border}`,
+                                      color: token.chipText
+                                    }}>
+                                      {token.label}
+                                    </span>
+                                  </div>
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
+              );
+            })}
+          </div>
+        ))
       )}
 
-      {/* Relocate Classroom Modal */}
-      <Modal
-        isOpen={showRoomModal && !!selectedAssignment}
-        onClose={() => setShowRoomModal(false)}
-        title={
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <ArrowRightLeft size={20} style={{ color: 'var(--accent-primary)' }} />
-            <span>Relocate Classroom</span>
-          </div>
-        }
-      >
-        {selectedAssignment && (
-          <div>
+      {/* Classroom Relocation Modal */}
+      {showRoomModal && selectedAssignment && (
+        <Modal title="Relocate Classroom" onClose={() => setShowRoomModal(false)}>
+          <div style={{ padding: '0.5rem 0' }}>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-              Relocating <strong>{selectedAssignment.subject?.subjectCode}</strong> on {selectedAssignment.dayOfWeek} P{selectedAssignment.periodNumber}
+              Relocate class for <strong>{selectedAssignment.subject?.subjectCode} - {selectedAssignment.subject?.subjectName}</strong> ({selectedAssignment.dayOfWeek} P{selectedAssignment.periodNumber})
             </p>
-
-            <div className="form-group">
-              <label className="form-label">Current Room</label>
-              <input type="text" className="form-control" value={selectedAssignment.room?.roomCode} disabled />
+            <div className="form-group" style={{ marginBottom: '1rem' }}>
+              <label className="form-label">Current Classroom</label>
+              <input
+                type="text"
+                className="form-control"
+                value={`${selectedAssignment.room?.roomCode} (${selectedAssignment.room?.blockName || 'Block'} - Flr ${selectedAssignment.room?.floorNumber || 1})`}
+                disabled
+              />
             </div>
-
-            <div className="form-group">
-              <label className="form-label">Select Target Room</label>
-              <select className="form-control" value={newRoomId} onChange={e => setNewRoomId(e.target.value)}>
-                <option value="">-- Choose New Room --</option>
+            <div className="form-group" style={{ marginBottom: '1rem' }}>
+              <label className="form-label">New Classroom</label>
+              <select
+                className="form-control"
+                value={newRoomId}
+                onChange={e => setNewRoomId(e.target.value)}
+              >
+                <option value="">-- Select Room --</option>
                 {rooms.map(r => (
                   <option key={r.id} value={r.id}>
-                    {r.roomCode} ({r.roomType} &bull; Cap: {r.capacity})
+                    {r.roomCode} ({r.roomType}) - Cap: {r.capacity} ({r.blockName || 'Block'} Flr {r.floorNumber || 1})
                   </option>
                 ))}
               </select>
             </div>
-
-            <div className="form-group">
+            <div className="form-group" style={{ marginBottom: '1.5rem' }}>
               <label className="form-label">Reason for Relocation</label>
               <input
                 type="text"
                 className="form-control"
-                placeholder="e.g. Projector maintenance, Air conditioning repair"
+                placeholder="e.g. Projector maintenance, Air conditioning issue"
                 value={roomChangeReason}
                 onChange={e => setRoomChangeReason(e.target.value)}
               />
             </div>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
               <button className="btn btn-secondary" onClick={() => setShowRoomModal(false)}>Cancel</button>
-              <button className="btn btn-primary" onClick={handleChangeRoom}>Confirm Relocation</button>
+              <button className="btn btn-primary" onClick={handleChangeRoom}>Save Relocation</button>
             </div>
           </div>
-        )}
-      </Modal>
-
-      {/* Conflict-Checker / Add Slot Modal */}
-      <Modal
-        isOpen={showModal}
-        onClose={() => setShowModal(false)}
-        title={
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <ShieldCheck size={22} style={{ color: 'var(--accent-primary)' }} />
-            <span>Schedule Assignment Validator</span>
-          </div>
-        }
-      >
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-          <div className="form-group">
-            <label className="form-label">Subject</label>
-            <select className="form-control" value={formData.subjectId} onChange={e => setFormData({ ...formData, subjectId: e.target.value })}>
-              <option value="">-- Choose Subject --</option>
-              {subjects.map(s => <option key={s.id} value={s.id}>{s.subjectCode} - {s.subjectName}</option>)}
-            </select>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Faculty</label>
-            <select className="form-control" value={formData.facultyId} onChange={e => setFormData({ ...formData, facultyId: e.target.value })}>
-              <option value="">-- Choose Faculty --</option>
-              {faculty.map(f => <option key={f.id} value={f.id}>{f.name} ({f.department})</option>)}
-            </select>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Room</label>
-            <select className="form-control" value={formData.roomId} onChange={e => setFormData({ ...formData, roomId: e.target.value })}>
-              <option value="">-- Choose Room --</option>
-              {rooms.map(r => <option key={r.id} value={r.id}>{r.roomCode} ({r.roomType})</option>)}
-            </select>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Day of Week</label>
-            <select className="form-control" value={formData.dayOfWeek} onChange={e => setFormData({ ...formData, dayOfWeek: e.target.value })}>
-              {days.map(d => <option key={d} value={d}>{d}</option>)}
-            </select>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Start Period</label>
-            <select className="form-control" value={formData.periodNumber} onChange={e => setFormData({ ...formData, periodNumber: e.target.value })}>
-              {[1, 2, 3, 4, 5, 6, 7, 8].map(p => <option key={p} value={p}>Period {p}</option>)}
-            </select>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Duration (Periods)</label>
-            <select className="form-control" value={formData.durationPeriods} onChange={e => setFormData({ ...formData, durationPeriods: e.target.value })}>
-              <option value="1">1 Period (Theory / Tutorial)</option>
-              <option value="2">2 Periods (Lab Block)</option>
-              <option value="3">3 Periods (Extended Lab Block)</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Validation Feedback Area */}
-        {validationResult && (
-          <div style={{
-            marginTop: '1rem',
-            padding: '0.85rem',
-            borderRadius: '8px',
-            background: validationResult.valid ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-            border: `1px solid ${validationResult.valid ? '#10b981' : '#ef4444'}`
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, color: validationResult.valid ? '#34d399' : '#f87171' }}>
-              {validationResult.valid ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
-              <span>{validationResult.valid ? 'Constraint Satisfaction Confirmed' : `Conflict Detected: ${validationResult.conflictType}`}</span>
-            </div>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-              {validationResult.message}
-            </p>
-          </div>
-        )}
-
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1.5rem' }}>
-          <button className="btn btn-secondary" onClick={() => setShowModal(false)}>Close</button>
-          <button className="btn btn-secondary" onClick={handleValidate} disabled={validating}>
-            {validating ? 'Validating...' : 'Check Conflict'}
-          </button>
-          {validationResult?.valid && (
-            <button className="btn btn-primary" onClick={handleSaveAssignment}>
-              Commit Assignment
-            </button>
-          )}
-        </div>
-      </Modal>
+        </Modal>
+      )}
     </div>
   );
 }

@@ -35,7 +35,7 @@ public class OfferingController {
     public ResponseEntity<List<SubjectOffering>> getAllOfferings(
             @RequestParam(required = false) String department,
             @RequestParam(required = false) Integer semester) {
-        autoSyncOfferingsIfMissing(department, semester);
+        // auto-sync removed from GET: offerings are created only by explicit POST actions
         List<SubjectOffering> list = offeringRepository.findAll();
         if (semester != null) {
             list = list.stream().filter(o -> {
@@ -73,6 +73,9 @@ public class OfferingController {
         Subject subject = subjectRepository.findById(subjectId).orElseThrow(() -> new IllegalArgumentException("Subject not found"));
         Faculty assignedFaculty = assignedFacultyId != null ? facultyRepository.findById(assignedFacultyId).orElse(null) : null;
 
+        if (subject.getSemester() != null && batch.getSemester() != null && !Objects.equals(subject.getSemester(), batch.getSemester())) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Subject semester does not match the section's semester."));
+        }
         Integer semester = parseInteger(payload.get("semester"));
 
         SubjectOffering offering = SubjectOffering.builder()
@@ -80,7 +83,7 @@ public class OfferingController {
                 .subject(subject)
                 .assignedFaculty(assignedFaculty)
                 .academicYear((String) payload.get("academicYear"))
-                .semester(semester != null ? semester : batch.getSemester())
+                .semester(subject.getSemester() != null ? subject.getSemester() : batch.getSemester())
                 .active(true)
                 .build();
 
@@ -110,6 +113,9 @@ public class OfferingController {
             @RequestParam(required = false, defaultValue = "2026-2027") String academicYear,
             @RequestParam(required = false, defaultValue = "false") boolean forceReassign) {
 
+        if (department == null || department.trim().isEmpty() || department.equalsIgnoreCase("ALL") || semester == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Select a department and semester before running Auto-Assign."));
+        }
         // 1. Load scope data
         List<Subject> subjects = subjectRepository.findAll().stream()
                 .filter(Subject::isActive)
@@ -194,7 +200,7 @@ public class OfferingController {
                 // Create new offering
                 Batch batch = batchRepository.findById(decision.batchId()).orElse(null);
                 Subject subject = subjectRepository.findById(decision.subjectId()).orElse(null);
-                if (batch != null && subject != null) {
+                if (batch != null && subject != null && subject.getSemester() != null && Objects.equals(subject.getSemester(), batch.getSemester())) {
                     SubjectOffering newOff = SubjectOffering.builder()
                             .batch(batch)
                             .subject(subject)
@@ -311,6 +317,12 @@ public class OfferingController {
         }).orElse(ResponseEntity.notFound().build());
     }
 
+    @PostMapping("/sync")
+    public ResponseEntity<?> syncOfferings(@RequestParam String department, @RequestParam Integer semester) {
+        autoSyncOfferingsIfMissing(department, semester);
+        return ResponseEntity.ok(Map.of("message", "Sync completed"));
+    }
+
     private void autoSyncOfferingsIfMissing(String department, Integer semester) {
         try {
             List<Subject> subjects = subjectRepository.findAll().stream()
@@ -362,7 +374,7 @@ public class OfferingController {
             for (Subject sub : subjects) {
                 List<Batch> subBatches = allBatches.stream()
                         .filter(b -> (sub.getDepartment() == null || com.odysseus.backend.util.DepartmentMatcher.matches(b.getDepartment(), sub.getDepartment()))
-                                && (sub.getSemester() == null || Objects.equals(b.getSemester(), sub.getSemester())))
+                                && (sub.getSemester() != null && Objects.equals(b.getSemester(), sub.getSemester())))
                         .sorted(Comparator.comparing(b -> b.getSection() != null ? b.getSection() : b.getBatchName()))
                         .collect(Collectors.toList());
 

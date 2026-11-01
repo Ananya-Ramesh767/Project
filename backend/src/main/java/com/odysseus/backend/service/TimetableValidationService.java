@@ -20,6 +20,30 @@ public class TimetableValidationService {
     private final FacultyAvailabilityRepository availabilityRepository;
 
     /**
+     * Determines if an assignment represents a common/non-teaching period (e.g. Library).
+     * Generic identification: subjectType (COMMON, NON_TEACHING, LIBRARY) or name/code descriptor.
+     */
+    private boolean isCommonPeriod(TimetableAssignment a) {
+        if (a == null || a.getSubject() == null) return false;
+        String type = a.getSubject().getSubjectType() != null ? a.getSubject().getSubjectType().toUpperCase().trim() : "";
+        if (type.equals("COMMON") || type.equals("NON_TEACHING") || type.equals("LIBRARY")) return true;
+        String name = a.getSubject().getSubjectName() != null ? a.getSubject().getSubjectName().toUpperCase().trim() : "";
+        String code = a.getSubject().getSubjectCode() != null ? a.getSubject().getSubjectCode().toUpperCase().trim() : "";
+        return name.contains("LIBRARY") || code.contains("LIB");
+    }
+
+    /**
+     * Checks if a room represents the shared Library room.
+     */
+    private boolean isLibraryRoom(Room r) {
+        if (r == null) return false;
+        String code = r.getRoomCode() != null ? r.getRoomCode().toUpperCase().trim() : "";
+        String name = r.getRoomName() != null ? r.getRoomName().toUpperCase().trim() : "";
+        String type = r.getRoomType() != null ? r.getRoomType().toUpperCase().trim() : "";
+        return code.contains("LIB") || name.contains("LIBRARY") || type.contains("LIBRARY");
+    }
+
+    /**
      * Validates a single proposed assignment against existing persisted assignments.
      */
     public TimetableValidationResult validateProposedAssignment(TimetableAssignment proposed, Long excludeAssignmentId) {
@@ -29,7 +53,7 @@ public class TimetableValidationService {
         if (proposed.getSubject() == null || proposed.getSubject().getId() == null) {
             return TimetableValidationResult.failure("MISSING_DATA", "Subject is required.");
         }
-        if (proposed.getFaculty() == null || proposed.getFaculty().getId() == null) {
+        if ((proposed.getFaculty() == null || proposed.getFaculty().getId() == null) && !isCommonPeriod(proposed)) {
             return TimetableValidationResult.failure("MISSING_DATA", "Faculty is required.");
         }
         if (proposed.getRoom() == null || proposed.getRoom().getId() == null) {
@@ -63,10 +87,14 @@ public class TimetableValidationService {
                     "Continuous class block crosses Lunch Break (12:40 - 13:30). Labs must not cross lunch.");
         }
 
-        Batch batch = batchRepository.findById(proposed.getBatch().getId()).orElse(proposed.getBatch());
-        Subject subject = subjectRepository.findById(proposed.getSubject().getId()).orElse(proposed.getSubject());
-        Faculty faculty = facultyRepository.findById(proposed.getFaculty().getId()).orElse(proposed.getFaculty());
-        Room room = roomRepository.findById(proposed.getRoom().getId()).orElse(proposed.getRoom());
+        Batch batch = (proposed.getBatch() != null && proposed.getBatch().getId() != null) ?
+                batchRepository.findById(proposed.getBatch().getId()).orElse(proposed.getBatch()) : proposed.getBatch();
+        Subject subject = (proposed.getSubject() != null && proposed.getSubject().getId() != null) ?
+                subjectRepository.findById(proposed.getSubject().getId()).orElse(proposed.getSubject()) : proposed.getSubject();
+        Faculty faculty = (proposed.getFaculty() != null && proposed.getFaculty().getId() != null) ?
+                facultyRepository.findById(proposed.getFaculty().getId()).orElse(proposed.getFaculty()) : proposed.getFaculty();
+        Room room = (proposed.getRoom() != null && proposed.getRoom().getId() != null) ?
+                roomRepository.findById(proposed.getRoom().getId()).orElse(proposed.getRoom()) : proposed.getRoom();
 
         // Check 1: Room Capacity Constraint
         if (room.getCapacity() != null && batch.getStrength() != null && room.getCapacity() < batch.getStrength()) {
@@ -76,31 +104,38 @@ public class TimetableValidationService {
         }
 
         // Check 2: Room Type Constraint
-        boolean isLabSession = proposed.isLabBlock() || "LAB".equalsIgnoreCase(proposed.getActivityType()) || "LAB".equalsIgnoreCase(subject.getSubjectType());
+        boolean isLabSession = !isSpecialActivity(proposed) && (proposed.isLabBlock() || "LAB".equalsIgnoreCase(proposed.getActivityType()) || "LAB".equalsIgnoreCase(subject.getSubjectType()));
         if (isLabSession && !isLabRoom(room.getRoomType())) {
             return TimetableValidationResult.failure("ROOM_TYPE", 
                     String.format("Subject [%s] lab session requires a LAB room, but room [%s] is of type '%s'.",
                             subject.getSubjectCode(), room.getRoomCode(), room.getRoomType()));
         }
-
-        // Check 3: Faculty Eligibility Constraint
-        boolean isEligible = faculty.getEligibleSubjects().stream()
-                .anyMatch(s -> Objects.equals(s.getId(), subject.getId()) 
-                        || (s.getSubjectCode() != null && s.getSubjectCode().equalsIgnoreCase(subject.getSubjectCode())));
-        if (!isEligible) {
-            return TimetableValidationResult.failure("FACULTY_ELIGIBILITY", 
-                    String.format("Faculty [%s (%s)] is not eligible to teach subject [%s - %s].",
-                            faculty.getName(), faculty.getEmployeeId(), subject.getSubjectCode(), subject.getSubjectName()));
+        if (isSpecialActivity(proposed) && isLabRoom(room.getRoomType())) {
+            return TimetableValidationResult.failure("ROOM_TYPE",
+                    String.format("Special activity [%s] must use the home classroom, but room [%s] is of type '%s'.",
+                            proposed.getActivityType(), room.getRoomCode(), room.getRoomType()));
         }
 
-        // Check 4: Faculty Availability Constraint
-        List<FacultyAvailability> unavailabilities = availabilityRepository.findByFacultyIdAndDayOfWeek(faculty.getId(), proposed.getDayOfWeek());
-        for (FacultyAvailability fa : unavailabilities) {
-            if (!fa.isAvailable()) {
-                if (fa.getPeriodNumber() >= proposedStart && fa.getPeriodNumber() <= proposedEnd) {
-                    return TimetableValidationResult.failure("FACULTY_UNAVAILABLE",
-                            String.format("Faculty [%s] is marked UNAVAILABLE on %s at period P%d.",
-                                    faculty.getName(), proposed.getDayOfWeek(), fa.getPeriodNumber()));
+        // Check 3: Faculty Eligibility Constraint (skipped if no faculty required)
+        if (faculty != null && !isCommonPeriod(proposed)) {
+            boolean isEligible = faculty.getEligibleSubjects().stream()
+                    .anyMatch(s -> Objects.equals(s.getId(), subject.getId()) 
+                            || (s.getSubjectCode() != null && s.getSubjectCode().equalsIgnoreCase(subject.getSubjectCode())));
+            if (!isEligible) {
+                return TimetableValidationResult.failure("FACULTY_ELIGIBILITY", 
+                        String.format("Faculty [%s (%s)] is not eligible to teach subject [%s - %s].",
+                                faculty.getName(), faculty.getEmployeeId(), subject.getSubjectCode(), subject.getSubjectName()));
+            }
+
+            // Check 4: Faculty Availability Constraint
+            List<FacultyAvailability> unavailabilities = availabilityRepository.findByFacultyIdAndDayOfWeek(faculty.getId(), proposed.getDayOfWeek());
+            for (FacultyAvailability fa : unavailabilities) {
+                if (!fa.isAvailable()) {
+                    if (fa.getPeriodNumber() >= proposedStart && fa.getPeriodNumber() <= proposedEnd) {
+                        return TimetableValidationResult.failure("FACULTY_UNAVAILABLE",
+                                String.format("Faculty [%s] is marked UNAVAILABLE on %s at period P%d.",
+                                        faculty.getName(), proposed.getDayOfWeek(), fa.getPeriodNumber()));
+                    }
                 }
             }
         }
@@ -131,7 +166,7 @@ public class TimetableValidationService {
             }
 
             // Conflict Check 6: Faculty Conflict
-            if (Objects.equals(existing.getFaculty().getId(), faculty.getId())) {
+            if (faculty != null && existing.getFaculty() != null && Objects.equals(existing.getFaculty().getId(), faculty.getId())) {
                 return TimetableValidationResult.failure("FACULTY_CONFLICT", 
                         String.format("Faculty [%s] is already scheduled teaching section [%s] on %s at period P%d-P%d. Faculty double-booking is prohibited.",
                                 faculty.getName(), existing.getBatch().getBatchName(), proposed.getDayOfWeek(), existStart, existEnd));
@@ -139,14 +174,26 @@ public class TimetableValidationService {
 
             // Conflict Check 7: Room Conflict
             if (Objects.equals(existing.getRoom().getId(), room.getId())) {
-                return TimetableValidationResult.failure("ROOM_CONFLICT", 
-                        String.format("Room [%s] is already occupied by section [%s] on %s at period P%d-P%d. Room double-booking is prohibited.",
-                                room.getRoomCode(), existing.getBatch().getBatchName(), proposed.getDayOfWeek(), existStart, existEnd));
+                if (isLibraryRoom(room)) {
+                    int existingStrength = (existing.getBatch() != null && existing.getBatch().getStrength() != null) ? existing.getBatch().getStrength() : 60;
+                    int proposedStrength = (batch.getStrength() != null) ? batch.getStrength() : 60;
+                    int roomCapacity = (room.getCapacity() != null) ? room.getCapacity() : 80;
+                    if (existingStrength + proposedStrength > roomCapacity) {
+                        return TimetableValidationResult.failure("ROOM_CONFLICT", 
+                                String.format("Library [%s] capacity (%d) exceeded by simultaneous sections [%s] (%d) and [%s] (%d) on %s at P%d-P%d.",
+                                        room.getRoomCode(), roomCapacity, existing.getBatch().getBatchName(), existingStrength,
+                                        batch.getBatchName(), proposedStrength, proposed.getDayOfWeek(), existStart, existEnd));
+                    }
+                } else {
+                    return TimetableValidationResult.failure("ROOM_CONFLICT", 
+                            String.format("Room [%s] is already occupied by section [%s] on %s at period P%d-P%d. Room double-booking is prohibited.",
+                                    room.getRoomCode(), existing.getBatch().getBatchName(), proposed.getDayOfWeek(), existStart, existEnd));
+                }
             }
         }
 
         // Conflict Check 8: Faculty Maximum Weekly Workload
-        if (faculty.getMaxWeeklyLoad() != null && faculty.getMaxWeeklyLoad() > 0) {
+        if (faculty != null && faculty.getMaxWeeklyLoad() != null && faculty.getMaxWeeklyLoad() > 0) {
             List<TimetableAssignment> facultyWeeklyAssignments = timetableRepository.findByFacultyIdAndActiveTrue(faculty.getId());
             int currentWorkload = facultyWeeklyAssignments.stream()
                     .filter(a -> excludeAssignmentId == null || !Objects.equals(a.getId(), excludeAssignmentId))
@@ -176,6 +223,7 @@ public class TimetableValidationService {
         Map<String, TimetableAssignment> sectionSlotMap = new HashMap<>();
         Map<String, TimetableAssignment> facultySlotMap = new HashMap<>();
         Map<String, TimetableAssignment> roomSlotMap = new HashMap<>();
+        Map<String, Integer> roomSlotOccupancyMap = new HashMap<>();
         Map<Long, Integer> facultyLoadMap = new HashMap<>();
 
         for (TimetableAssignment a : assignments) {
@@ -188,12 +236,11 @@ public class TimetableValidationService {
                 errors.add(String.format("Invalid period range P%d-P%d for subject [%s].", start, end, a.getSubject().getSubjectCode()));
             }
 
-            // Reject any placeholder subjects: Free, Library, Self-study
+            // Reject only genuine empty filler placeholder subjects: Free, Self-study (Library is a legitimate common period)
             if (a.getSubject() != null) {
                 String subCode = a.getSubject().getSubjectCode() != null ? a.getSubject().getSubjectCode().toUpperCase().trim() : "";
                 String subName = a.getSubject().getSubjectName() != null ? a.getSubject().getSubjectName().toUpperCase().trim() : "";
                 if (subCode.contains("FREE") || subName.contains("FREE") 
-                        || subCode.contains("LIBRARY") || subName.contains("LIBRARY")
                         || subCode.contains("SELF_STUDY") || subName.contains("SELF-STUDY") || subName.contains("SELF STUDY")) {
                     errors.add(String.format("Placeholder period [%s / %s] detected on %s P%d for section [%s]. Placeholder periods are strictly forbidden.",
                             subCode, subName, a.getDayOfWeek(), start, a.getBatch() != null ? a.getBatch().getBatchName() : "Unknown"));
@@ -216,7 +263,7 @@ public class TimetableValidationService {
             }
 
             // Room type: Lab sessions must use LAB rooms
-            boolean isLabSession = a.isLabBlock() || "LAB".equalsIgnoreCase(a.getActivityType()) || (a.getSubject() != null && "LAB".equalsIgnoreCase(a.getSubject().getSubjectType()));
+            boolean isLabSession = !isSpecialActivity(a) && (a.isLabBlock() || "LAB".equalsIgnoreCase(a.getActivityType()) || (a.getSubject() != null && "LAB".equalsIgnoreCase(a.getSubject().getSubjectType())));
             if (isLabSession && a.getRoom() != null && !isLabRoom(a.getRoom().getRoomType())) {
                 errors.add(String.format("Lab session for [%s] requires LAB room, but room [%s] is %s.",
                         a.getSubject().getSubjectCode(), a.getRoom().getRoomCode(), a.getRoom().getRoomType()));
@@ -246,10 +293,24 @@ public class TimetableValidationService {
 
                 if (a.getRoom() != null) {
                     String rmKey = a.getRoom().getId() + "@" + slotKey;
-                    if (roomSlotMap.containsKey(rmKey)) {
-                        errors.add(String.format("Room [%s] conflict on %s at P%d.", a.getRoom().getRoomCode(), a.getDayOfWeek(), p));
+                    int sectionStrength = (a.getBatch() != null && a.getBatch().getStrength() != null) ? a.getBatch().getStrength() : 60;
+                    if (isLibraryRoom(a.getRoom())) {
+                        int currentOcc = roomSlotOccupancyMap.getOrDefault(rmKey, 0);
+                        int roomCapacity = (a.getRoom().getCapacity() != null) ? a.getRoom().getCapacity() : 80;
+                        if (currentOcc + sectionStrength > roomCapacity) {
+                            errors.add(String.format("Library Room [%s] capacity (%d) exceeded on %s at P%d with additional section [%s] (%d). Total attempted: %d.",
+                                    a.getRoom().getRoomCode(), roomCapacity, a.getDayOfWeek(), p,
+                                    a.getBatch() != null ? a.getBatch().getBatchName() : "Unknown", sectionStrength, currentOcc + sectionStrength));
+                        } else {
+                            roomSlotOccupancyMap.put(rmKey, currentOcc + sectionStrength);
+                            roomSlotMap.put(rmKey, a);
+                        }
                     } else {
-                        roomSlotMap.put(rmKey, a);
+                        if (roomSlotMap.containsKey(rmKey)) {
+                            errors.add(String.format("Room [%s] conflict on %s at P%d.", a.getRoom().getRoomCode(), a.getDayOfWeek(), p));
+                        } else {
+                            roomSlotMap.put(rmKey, a);
+                        }
                     }
                 }
             }
@@ -279,6 +340,18 @@ public class TimetableValidationService {
      * Determines if a room type is suitable for laboratory sessions.
      * Consistent with TimetableSolverService.isLabRoom().
      */
+    /**
+     * Determines if an assignment is a special activity (non‑academic).
+     * Special activities include AT, TT, NPTEL, COUN, LC, CAREER_SKILL_DEVELOPMENT, etc.
+     * They are identified by an activityType that is not "ACADEMIC" (case‑insensitive).
+     */
+    private boolean isSpecialActivity(TimetableAssignment a) {
+        if (a == null) return false;
+        String type = a.getActivityType();
+        return type != null && !type.equalsIgnoreCase("ACADEMIC") && !type.equalsIgnoreCase("LAB");
+    }
+
+    // Determines if a room type is suitable for laboratory sessions.
     private boolean isLabRoom(String roomType) {
         if (roomType == null || roomType.isBlank()) return false;
         String upper = roomType.toUpperCase().trim();

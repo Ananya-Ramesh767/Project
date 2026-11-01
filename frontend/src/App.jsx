@@ -5,6 +5,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 
 import LandingPage from './pages/LandingPage';
 import LoginPage from './pages/LoginPage';
+import SignupPage from './pages/SignupPage';
 import AdminDashboard from './pages/AdminDashboard';
 import SubjectManagementPage from './pages/SubjectManagementPage';
 import NepRuleManagementPage from './pages/NepRuleManagementPage';
@@ -44,7 +45,7 @@ export default function App() {
   const handleLogout = ()     => { setUser(null);  localStorage.removeItem('odysseus_user'); };
 
   const adminHome = '/dashboard';
-  const facultyHome = '/timetable';
+  const facultyHome = '/faculty-portal';
 
   return (
     <Router>
@@ -60,6 +61,7 @@ export default function App() {
             {/* Public */}
             <Route path="/"      element={user ? <Navigate to={user.role === 'ROLE_ADMIN' ? adminHome : facultyHome} replace /> : <LandingPage />} />
             <Route path="/login" element={<LoginPage onLogin={handleLogin} />} />
+            <Route path="/signup" element={<SignupPage onLogin={handleLogin} />} />
 
             {/* Admin ──────────────────────────────────────────────────── */}
             <Route path="/dashboard" element={
@@ -122,28 +124,16 @@ export default function App() {
               </ProtectedRoute>
             } />
 
-            <Route path="/syllabus" element={
-              <ProtectedRoute user={user} requiredRole="ROLE_ADMIN">
-                <Page><SyllabusManagementPage user={user} /></Page>
-              </ProtectedRoute>
-            } />
-
-            {/* Admin + Faculty ────────────────────────────────────────── */}
+            {/* Faculty Pages ────────────────────────────────────────── */}
             <Route path="/faculty-portal" element={
-              <ProtectedRoute user={user} requiredRole={['ROLE_ADMIN', 'ROLE_FACULTY']}>
+              <ProtectedRoute user={user} requiredRole="ROLE_FACULTY">
                 <Page><FacultyPortalPage user={user} /></Page>
               </ProtectedRoute>
             } />
 
-            <Route path="/calendar" element={
+            <Route path="/syllabus" element={
               <ProtectedRoute user={user} requiredRole={['ROLE_ADMIN', 'ROLE_FACULTY']}>
-                <Page><CalendarManagementPage user={user} /></Page>
-              </ProtectedRoute>
-            } />
-
-            <Route path="/timetable" element={
-              <ProtectedRoute user={user} requiredRole={['ROLE_ADMIN', 'ROLE_FACULTY']}>
-                <Page><SectionTimetablePage user={user} /></Page>
+                <Page><SyllabusManagementPage user={user} /></Page>
               </ProtectedRoute>
             } />
 
@@ -153,10 +143,22 @@ export default function App() {
               </ProtectedRoute>
             } />
 
-            {/* Faculty only ───────────────────────────────────────────── */}
             <Route path="/my-lesson-plans" element={
-              <ProtectedRoute user={user} requiredRole="ROLE_FACULTY">
-                <Page><MyLessonPlansPage user={user} /></Page>
+              <ProtectedRoute user={user} requiredRole={['ROLE_ADMIN', 'ROLE_FACULTY']}>
+                <Page><GenerateLessonPlanPage user={user} /></Page>
+              </ProtectedRoute>
+            } />
+
+            {/* Shared Admin + Faculty Pages ────────────────────────────── */}
+            <Route path="/calendar" element={
+              <ProtectedRoute user={user} requiredRole={['ROLE_ADMIN', 'ROLE_FACULTY']}>
+                <Page><CalendarManagementPage user={user} /></Page>
+              </ProtectedRoute>
+            } />
+
+            <Route path="/timetable" element={
+              <ProtectedRoute user={user} requiredRole={['ROLE_ADMIN', 'ROLE_FACULTY']}>
+                <Page><SectionTimetablePage user={user} /></Page>
               </ProtectedRoute>
             } />
 

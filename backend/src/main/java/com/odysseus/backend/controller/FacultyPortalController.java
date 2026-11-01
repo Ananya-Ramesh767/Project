@@ -4,7 +4,10 @@ import com.odysseus.backend.domain.*;
 import com.odysseus.backend.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
@@ -19,45 +22,131 @@ public class FacultyPortalController {
     private final FacultyRepository facultyRepository;
     private final SubjectOfferingRepository offeringRepository;
     private final TimetableAssignmentRepository timetableRepository;
+    private final LessonPlanRepository lessonPlanRepository;
+    private final LessonPlanSessionRepository lessonPlanSessionRepository;
+    private final UserRepository userRepository;
 
-    @GetMapping("/list")
-    public ResponseEntity<List<Map<String, Object>>> getTeachingFacultyList() {
-        List<Faculty> list = facultyRepository.findByActiveTrue().stream()
-                .filter(Faculty::isEligibleForTeaching)
-                .sorted(Comparator.comparing(Faculty::getName))
-                .collect(Collectors.toList());
-
-        List<Map<String, Object>> result = list.stream().map(f -> {
-            Map<String, Object> m = new HashMap<>();
-            m.put("id", f.getId());
-            m.put("name", f.getName());
-            m.put("employeeId", f.getEmployeeId());
-            m.put("department", f.getDepartment());
-            m.put("departmentKey", f.getDepartmentKey());
-            m.put("designation", f.getDesignation());
-            return m;
-        }).collect(Collectors.toList());
-
-        return ResponseEntity.ok(result);
+    private static String normalizeEmail(String email) {
+        if (email == null) return "";
+        return email.trim().toLowerCase().replaceAll("\\.+", ".").replaceAll("\\.@|@\\.", "@");
     }
 
-    @GetMapping("/profile")
-    public ResponseEntity<?> getFacultyProfile(@RequestParam Long facultyId) {
-        Faculty faculty = facultyRepository.findById(facultyId).orElse(null);
-        if (faculty == null) {
-            return ResponseEntity.notFound().build();
+    private static String cleanName(String name) {
+        if (name == null) return "";
+        return name.toLowerCase()
+                .replaceAll("\\b(dr|mr|mrs|ms|prof|asst|assoc)\\b", "")
+                .replaceAll("[^a-z0-9]", "");
+    }
+
+    /**
+     * Resolves the authenticated faculty member strictly from JWT authentication context.
+     * Looks up by user email against faculty email with robust normalization (handling double dots,
+     * subdomains, and name matching fallbacks).
+     */
+    private Faculty resolveAuthenticatedFaculty() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || authentication.getName() == null) {
+            return null;
+        }
+        String username = authentication.getName();
+        User user = userRepository.findByUsername(username)
+                .or(() -> userRepository.findByEmail(username))
+                .orElse(null);
+        if (user == null) {
+            return null;
         }
 
-        List<SubjectOffering> offerings = offeringRepository.findByAssignedFacultyIdAndActiveTrue(facultyId);
-        int totalWeeklyHours = 0;
+        List<Faculty> activeFaculty = facultyRepository.findByActiveTrue();
+        String userEmail = user.getEmail() != null ? user.getEmail() : "";
+        String normUserEmail = normalizeEmail(userEmail);
+        String userPrefix = normUserEmail.contains("@") ? normUserEmail.substring(0, normUserEmail.indexOf('@')) : normUserEmail;
+        String userCleanName = cleanName(user.getFullName() != null && !user.getFullName().isBlank() ? user.getFullName() : user.getUsername());
+
+        // 1. Exact match on raw email
+        if (!userEmail.isBlank()) {
+            for (Faculty f : activeFaculty) {
+                if (f.getEmail() != null && f.getEmail().equalsIgnoreCase(userEmail.trim())) {
+                    return f;
+                }
+            }
+        }
+
+        // 2. Normalized email match (collapses duplicate dots like "s..bhuvaneswari" -> "s.bhuvaneswari")
+        if (!normUserEmail.isBlank()) {
+            for (Faculty f : activeFaculty) {
+                if (f.getEmail() != null && normalizeEmail(f.getEmail()).equals(normUserEmail)) {
+                    return f;
+                }
+            }
+        }
+
+        // 3. Email username prefix match (e.g. s.bhuvaneswari vs s.bhuvaneswari@eec.srmrmp.edu.in)
+        if (!userPrefix.isBlank()) {
+            for (Faculty f : activeFaculty) {
+                if (f.getEmail() != null) {
+                    String fNorm = normalizeEmail(f.getEmail());
+                    String fPrefix = fNorm.contains("@") ? fNorm.substring(0, fNorm.indexOf('@')) : fNorm;
+                    if (fPrefix.equalsIgnoreCase(userPrefix)) {
+                        return f;
+                    }
+                }
+            }
+        }
+
+        // 4. Cleaned Name match (e.g. user fullName "Bhuvaneswari S" -> "bhuvaneswaris" matches "Ms. S. Bhuvaneswari" -> "sbhuvaneswari" or contains)
+        if (!userCleanName.isBlank()) {
+            for (Faculty f : activeFaculty) {
+                String fClean = cleanName(f.getName());
+                if (fClean.equals(userCleanName) ||
+                        (fClean.length() > 5 && (userCleanName.contains(fClean) || fClean.contains(userCleanName)))) {
+                    return f;
+                }
+            }
+        }
+
+        // 5. Username match (e.g. username is employeeId FAC-CSE-012)
+        for (Faculty f : activeFaculty) {
+            if (f.getEmployeeId() != null && f.getEmployeeId().equalsIgnoreCase(user.getUsername().trim())) {
+                return f;
+            }
+        }
+
+        return null;
+    }
+
+    @GetMapping("/me")
+    public ResponseEntity<?> getMyProfile() {
+        Faculty faculty = resolveAuthenticatedFaculty();
+        if (faculty == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "No matching Faculty profile found for your account email. Please contact the administrator."));
+        }
+
+        List<SubjectOffering> offerings = offeringRepository.findByAssignedFacultyIdAndActiveTrue(faculty.getId());
+        int theoryHours = 0;
+        int labHours = 0;
         for (SubjectOffering o : offerings) {
             Subject s = o.getSubject();
             if (s != null) {
                 int l = (s.getWeeklyLecturePeriods() != null) ? s.getWeeklyLecturePeriods() : 3;
                 int p = (s.getWeeklyPracticalPeriods() != null) ? s.getWeeklyPracticalPeriods() : 0;
-                totalWeeklyHours += (l + p);
+                theoryHours += l;
+                labHours += p;
             }
         }
+        int totalHours = theoryHours + labHours;
+        int maxHours = faculty.getMaxWeeklyLoad() != null && faculty.getMaxWeeklyLoad() > 0 ? faculty.getMaxWeeklyLoad() : 18;
+
+        // Lesson progress summary
+        List<LessonPlan> plans = lessonPlanRepository.findBySubjectOffering_AssignedFaculty_IdAndActiveTrue(faculty.getId());
+        int totalSessions = 0;
+        int completedSessions = 0;
+        for (LessonPlan p : plans) {
+            List<LessonPlanSession> sessions = lessonPlanSessionRepository.findByLessonPlanIdAndActiveTrueOrderByOverallSequenceAsc(p.getId());
+            totalSessions += sessions.size();
+            completedSessions += sessions.stream().filter(s -> "COMPLETED".equalsIgnoreCase(s.getStatus())).count();
+        }
+        int overallProgress = totalSessions > 0 ? Math.round(((float) completedSessions / totalSessions) * 100) : 0;
 
         Map<String, Object> res = new HashMap<>();
         res.put("id", faculty.getId());
@@ -68,19 +157,27 @@ public class FacultyPortalController {
         res.put("departmentKey", faculty.getDepartmentKey());
         res.put("designation", faculty.getDesignation());
         res.put("qualification", faculty.getQualification());
-        res.put("specialization", faculty.getSpecialization());
-        res.put("category", faculty.getCategory());
-        res.put("eligibleForTeaching", faculty.isEligibleForTeaching());
-        res.put("maxWeeklyLoad", faculty.getMaxWeeklyLoad() != null ? faculty.getMaxWeeklyLoad() : 18);
-        res.put("currentLoad", totalWeeklyHours);
+        res.put("maxWeeklyLoad", maxHours);
+        res.put("currentLoad", totalHours);
+        res.put("theoryHours", theoryHours);
+        res.put("labHours", labHours);
         res.put("totalSubjects", offerings.size());
+        res.put("totalSessions", totalSessions);
+        res.put("completedSessions", completedSessions);
+        res.put("lessonProgressPercentage", overallProgress);
 
         return ResponseEntity.ok(res);
     }
 
     @GetMapping("/my-subjects")
-    public ResponseEntity<List<Map<String, Object>>> getMySubjects(@RequestParam Long facultyId) {
-        List<SubjectOffering> offerings = offeringRepository.findByAssignedFacultyIdAndActiveTrue(facultyId);
+    public ResponseEntity<?> getMySubjects() {
+        Faculty faculty = resolveAuthenticatedFaculty();
+        if (faculty == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "No matching Faculty profile found for your account email."));
+        }
+
+        List<SubjectOffering> offerings = offeringRepository.findByAssignedFacultyIdAndActiveTrue(faculty.getId());
 
         List<Map<String, Object>> list = new ArrayList<>();
         for (SubjectOffering o : offerings) {
@@ -108,8 +205,14 @@ public class FacultyPortalController {
     }
 
     @GetMapping("/my-timetable")
-    public ResponseEntity<List<Map<String, Object>>> getMyTimetable(@RequestParam Long facultyId) {
-        List<TimetableAssignment> assignments = timetableRepository.findByFacultyIdAndActiveTrue(facultyId);
+    public ResponseEntity<?> getMyTimetable() {
+        Faculty faculty = resolveAuthenticatedFaculty();
+        if (faculty == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "No matching Faculty profile found for your account email."));
+        }
+
+        List<TimetableAssignment> assignments = timetableRepository.findByFacultyIdAndActiveTrue(faculty.getId());
 
         List<Map<String, Object>> list = new ArrayList<>();
         for (TimetableAssignment a : assignments) {
@@ -131,8 +234,14 @@ public class FacultyPortalController {
     }
 
     @GetMapping("/my-workload")
-    public ResponseEntity<?> getMyWorkload(@RequestParam Long facultyId) {
-        List<SubjectOffering> offerings = offeringRepository.findByAssignedFacultyIdAndActiveTrue(facultyId);
+    public ResponseEntity<?> getMyWorkload() {
+        Faculty faculty = resolveAuthenticatedFaculty();
+        if (faculty == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("error", "No matching Faculty profile found for your account email."));
+        }
+
+        List<SubjectOffering> offerings = offeringRepository.findByAssignedFacultyIdAndActiveTrue(faculty.getId());
         int theoryHours = 0;
         int labHours = 0;
 
@@ -148,8 +257,8 @@ public class FacultyPortalController {
             }
         }
         int totalHours = theoryHours + labHours;
-        int maxHours = 18;
-        int freePeriods = Math.max(0, (6 * 8) - totalHours);
+        int maxHours = faculty.getMaxWeeklyLoad() != null && faculty.getMaxWeeklyLoad() > 0 ? faculty.getMaxWeeklyLoad() : 18;
+        int freePeriods = Math.max(0, (5 * 8) - totalHours);
 
         Map<String, Object> wl = new HashMap<>();
         wl.put("totalAssignedHours", totalHours);

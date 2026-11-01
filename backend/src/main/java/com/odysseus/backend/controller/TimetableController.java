@@ -29,6 +29,11 @@ public class TimetableController {
     private final RoomChangeHistoryRepository roomChangeHistoryRepository;
     private final TimetableEntryRepository entryRepository;
 
+    @GetMapping
+    public ResponseEntity<List<TimetableAssignment>> getAllTimetables() {
+        return ResponseEntity.ok(timetableRepository.findByActiveTrue());
+    }
+
     @GetMapping("/batch/{batchId}")
     public ResponseEntity<List<TimetableAssignment>> getTimetableForBatch(@PathVariable Long batchId) {
         return ResponseEntity.ok(timetableRepository.findByBatchIdAndActiveTrue(batchId));
@@ -56,8 +61,9 @@ public class TimetableController {
                 .orElseThrow(() -> new IllegalArgumentException("Batch not found"));
         Subject subject = subjectRepository.findById(proposed.getSubject().getId())
                 .orElseThrow(() -> new IllegalArgumentException("Subject not found"));
-        Faculty faculty = facultyRepository.findById(proposed.getFaculty().getId())
-                .orElseThrow(() -> new IllegalArgumentException("Faculty not found"));
+        Faculty faculty = (proposed.getFaculty() != null && proposed.getFaculty().getId() != null)
+                ? facultyRepository.findById(proposed.getFaculty().getId()).orElse(null)
+                : null;
         Room room = roomRepository.findById(proposed.getRoom().getId())
                 .orElseThrow(() -> new IllegalArgumentException("Room not found"));
 
