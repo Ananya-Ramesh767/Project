@@ -35,7 +35,7 @@ public class SchedulerDataService {
         SchedulerInputContractDto.Metadata metadata = SchedulerInputContractDto.Metadata.builder()
                 .academicYear("2026-2027")
                 .semester(5)
-                .institution("Odysseus Engineering College")
+                .institution("Easwari Engineering College")
                 .contractVersion("1.0.0")
                 .generatedAt(LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME))
                 .build();

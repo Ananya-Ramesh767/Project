@@ -1,7 +1,7 @@
 # SCHEDULER DATA CONTRACT & INTEGRATION BOUNDARY
 
 ## Overview
-This document specifies the exact JSON data contract exposed by **Person A (Admin & Data Layer)** for consumption by **Person B (Scheduling & Timetable Engine)** in the **Odysseus Timetable Generation System**.
+This document specifies the exact JSON data contract exposed by **Person A (Admin & Data Layer)** for consumption by **Person B (Scheduling & Timetable Engine)** in the **Easwari Engineering College Timetable Scheduler and Lesson Planner**.
 
 - **API Endpoint**: `GET /api/scheduler/input`
 - **Format**: `application/json`
@@ -17,7 +17,7 @@ This document specifies the exact JSON data contract exposed by **Person A (Admi
   "metadata": {
     "academicYear": "2026-2027",
     "semester": 5,
-    "institution": "Odysseus Engineering College",
+    "institution": "Easwari Engineering College",
     "contractVersion": "1.0.0",
     "generatedAt": "2026-09-07T11:30:00"
   },

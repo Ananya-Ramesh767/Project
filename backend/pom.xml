@@ -7,8 +7,8 @@
     <groupId>com.easwari</groupId>
     <artifactId>backend</artifactId>
     <version>1.0.0</version>
-    <name>Odysseus Admin &amp; Data Layer Backend</name>
-    <description>Person A — Data Layer and Admin Setup Module for Odysseus Timetable System</description>
+    <name>Easwari Engineering College Timetable Scheduler and Lesson Planner Backend</name>
+    <description>Easwari Engineering College Timetable Scheduler and Lesson Planner Backend</description>
 
     <parent>
         <groupId>org.springframework.boot</groupId>
