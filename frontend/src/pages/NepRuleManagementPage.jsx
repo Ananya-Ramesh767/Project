@@ -18,7 +18,7 @@ export default function NepRuleManagementPage({ user }) {
   });
 
   const getAuthToken = () => {
-    return user?.token || JSON.parse(localStorage.getItem('odysseus_user') || '{}')?.token || '';
+    return user?.token || JSON.parse(localStorage.getItem('eec_user') || '{}')?.token || '';
   };
 
   useEffect(() => {

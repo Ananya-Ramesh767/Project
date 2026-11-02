@@ -7,7 +7,7 @@ server:
 
 spring:
   application:
-    name: odysseus-backend
+    name: easwari-backend
   
   datasource:
     # Default to persistent file-based H2 (PostgreSQL compatibility mode) in ./data/odysseus_db

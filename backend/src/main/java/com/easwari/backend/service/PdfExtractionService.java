@@ -1051,7 +1051,7 @@ public class PdfExtractionService {
             tempScript.deleteOnExit();
             Files.writeString(tempScript.toPath(), OCR_POWERSHELL_SCRIPT, StandardCharsets.UTF_8);
 
-            tempDir = Files.createTempDirectory("odysseus_ocr_").toFile();
+            tempDir = Files.createTempDirectory("easwari_ocr_").toFile();
             tempDir.deleteOnExit();
 
             ObjectMapper mapper = new ObjectMapper();

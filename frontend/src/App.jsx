@@ -36,13 +36,16 @@ function Page({ children }) {
 export default function App() {
   const [user, setUser] = useState(() => {
     try {
-      const saved = localStorage.getItem('odysseus_user');
+      // Migrate legacy key once
+      const legacy = localStorage.getItem('odysseus_user');
+      if (legacy) { localStorage.setItem('eec_user', legacy); localStorage.removeItem('odysseus_user'); }
+      const saved = localStorage.getItem('eec_user');
       return saved ? JSON.parse(saved) : null;
     } catch { return null; }
   });
 
-  const handleLogin  = (data) => { setUser(data); localStorage.setItem('odysseus_user', JSON.stringify(data)); };
-  const handleLogout = ()     => { setUser(null);  localStorage.removeItem('odysseus_user'); };
+  const handleLogin  = (data) => { setUser(data); localStorage.setItem('eec_user', JSON.stringify(data)); };
+  const handleLogout = ()     => { setUser(null);  localStorage.removeItem('eec_user'); localStorage.removeItem('odysseus_user'); };
 
   const adminHome = '/dashboard';
   const facultyHome = '/faculty-portal';
