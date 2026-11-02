@@ -34,7 +34,7 @@ Person B is responsible for the automated timetable generation engine, constrain
 Person B consumes Person A's validated data layer via:
 
 - **Endpoint**: `GET /api/scheduler/input`
-- **DTO**: `com.odysseus.backend.dto.SchedulerInputContractDto`
+- **DTO**: `com.easwari.backend.dto.SchedulerInputContractDto`
 - **Readiness Verification**: `GET /api/scheduler/readiness` ensures all prerequisite data (subjects, faculty, rooms, timeslots, calendar rules) are ready before solving begins.
 
 ### JSON Contract Elements
@@ -62,7 +62,7 @@ Person B consumes Person A's validated data layer via:
 ## 3. Constraint-Satisfaction Solver Implementation
 
 The active scheduling engine is implemented in:
-`com.odysseus.backend.service.TimetableSolverService`
+`com.easwari.backend.service.TimetableSolverService`
 
 ### 3.1 Hard Constraints (Zero-Tolerance)
 1. **Section Non-Overlap**: A class section cannot have two subjects in the same timeslot.

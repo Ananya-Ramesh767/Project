@@ -20,7 +20,7 @@ day-by-day teaching plan against the shared academic calendar.
   this document. Phase 2 implements this contract verbatim.
 - **Reused entities**: `Subject`, `SubjectOffering`, `Batch`, `Faculty`,
   `AcademicCalendar`, `CalendarHoliday`, `CollegeTimeslot` — all at
-  `backend/src/main/java/com/odysseus/backend/domain/`, all already implemented by
+  `backend/src/main/java/com/easwari/backend/domain/`, all already implemented by
   Person A. This module adds new entities that reference them; it does not
   redesign or duplicate them.
 
@@ -112,7 +112,7 @@ block, per the explicit instruction that Project is *not* split into discrete
 units).
 
 ```java
-package com.odysseus.backend.domain;
+package com.easwari.backend.domain;
 
 import jakarta.persistence.*;
 import lombok.*;
@@ -189,7 +189,7 @@ Unique constraint (enforce in repository/service, not just convention):
 ### 1.3 `CourseOutcome`
 
 ```java
-package com.odysseus.backend.domain;
+package com.easwari.backend.domain;
 
 import jakarta.persistence.*;
 import lombok.*;
@@ -225,7 +225,7 @@ public class CourseOutcome {
 ### 1.4 `CourseObjective`
 
 ```java
-package com.odysseus.backend.domain;
+package com.easwari.backend.domain;
 
 import jakarta.persistence.*;
 import lombok.*;
@@ -266,7 +266,7 @@ One row per `(SubjectOffering, AcademicCalendar)` — one subject's plan for one
 batch for one semester.
 
 ```java
-package com.odysseus.backend.domain;
+package com.easwari.backend.domain;
 
 import jakarta.persistence.*;
 import lombok.*;
@@ -312,7 +312,7 @@ soft-delete convention.
 ### 1.6 `LessonPlanSession` (child — one row per calendar date + period-type occurrence)
 
 ```java
-package com.odysseus.backend.domain;
+package com.easwari.backend.domain;
 
 import jakarta.persistence.*;
 import lombok.*;

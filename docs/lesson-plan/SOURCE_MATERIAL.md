@@ -1,7 +1,7 @@
 # Lesson Plan Module — Source Material (Person C: Catherine)
 
 This is reference material gathered from the team's actual course documents for the
-"Odysseus" Smart Classroom project (OOPS-JAVA---Odysseus repo). It grounds the
+"Easwari Engineering College Timetable Scheduler and Lesson Planner" project (OOPS-JAVA---Odysseus repo). It grounds the
 lesson-plan module in real data instead of invented numbers. Do not invent
 institution-specific numbers (holiday dates, credit rules, etc.) beyond what is here —
 treat everything below as authoritative source-of-truth extracted from the team's own
@@ -9,7 +9,7 @@ PDFs/PPTX/DOCX.
 
 ## 1. Project identity & team boundary
 
-- Repo: OOPS-JAVA---Odysseus. Real code lives on `features/admin-data-inputs`
+- Repo: OOPS-JAVA---Odysseus (formerly "Odysseus"). Real code lives on `features/admin-data-inputs`
   (the `main` branch is just the initial empty scaffold).
 - Team 14, problem statement: "Smart Classroom - AI enabled Timetable Scheduler,
   Lesson plan preparation" — a constraint-based, forecast-aware scheduling engine
@@ -37,7 +37,7 @@ PDFs/PPTX/DOCX.
 
 ## 2. Existing backend schema (already implemented — reuse, don't duplicate)
 
-Located at `backend/src/main/java/com/odysseus/backend/domain/` on
+Located at `backend/src/main/java/com/easwari/backend/domain/` on
 `features/admin-data-inputs` (already merged into this branch's history):
 
 - **Subject**: `id, subjectCode, subjectName, department, semester, subjectType`
