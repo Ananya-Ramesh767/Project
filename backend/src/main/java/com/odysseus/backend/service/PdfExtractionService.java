@@ -1093,25 +1093,12 @@ public class PdfExtractionService {
                     File tempImg = new File(tempDir, "page_" + i + ".png");
                     ImageIO.write(image, "png", tempImg);
 
-                    ProcessBuilder pb = new ProcessBuilder(
-                            "powershell", "-ExecutionPolicy", "Bypass",
-                            "-File", tempScript.getAbsolutePath(),
-                            "-ImagePath", tempImg.getAbsolutePath()
-                    );
-                    pb.redirectErrorStream(true);
-                    Process process = pb.start();
-
-                    StringBuilder sb = new StringBuilder();
-                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                        String line;
-                        while ((line = reader.readLine()) != null) {
-                            sb.append(line).append("\n");
-                        }
+                    String json;
+                    try {
+                        json = runOcr(tempImg, tempScript);
+                    } finally {
+                        tempImg.delete();
                     }
-                    process.waitFor();
-                    tempImg.delete();
-
-                    String json = sb.toString().trim();
                     if (!json.startsWith("[")) {
                         log.warn("OCR output for page {} was not valid JSON: {}", i, json);
                         continue;
@@ -1201,6 +1188,148 @@ public class PdfExtractionService {
         }
 
         return allFaculty;
+    }
+
+    private String runOcr(File image, File script) throws Exception {
+        String os = System.getProperty("os.name", "").toLowerCase();
+        if (os.contains("win")) {
+            ProcessBuilder pb = new ProcessBuilder(
+                    "powershell", "-ExecutionPolicy", "Bypass",
+                    "-File", script.getAbsolutePath(),
+                    "-ImagePath", image.getAbsolutePath()
+            );
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+
+            StringBuilder sb = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    sb.append(line).append("\n");
+                }
+            }
+            process.waitFor();
+            return sb.toString().trim();
+        } else {
+            ProcessBuilder pb = new ProcessBuilder(
+                    "tesseract", image.getAbsolutePath(), "stdout", "-l", "eng", "tsv"
+            );
+            pb.redirectError(ProcessBuilder.Redirect.DISCARD);
+            Process process = pb.start();
+
+            StringBuilder sb = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    sb.append(line).append("\n");
+                }
+            }
+            process.waitFor();
+            return tsvToLinesJson(sb.toString());
+        }
+    }
+
+    public static String tsvToLinesJson(String tsv) {
+        if (tsv == null || tsv.trim().isEmpty()) {
+            return "[]";
+        }
+
+        String[] lines = tsv.split("\\r?\\n");
+        if (lines.length == 0) {
+            return "[]";
+        }
+
+        Map<String, Integer> colMap = new HashMap<>();
+        int startLine = 0;
+        if (lines[0].toLowerCase().contains("level")) {
+            startLine = 1;
+            String[] headers = lines[0].split("\t", -1);
+            for (int i = 0; i < headers.length; i++) {
+                colMap.put(headers[i].trim().toLowerCase(), i);
+            }
+        }
+
+        int levelIdx = colMap.getOrDefault("level", 0);
+        int blockIdx = colMap.getOrDefault("block_num", 2);
+        int parIdx = colMap.getOrDefault("par_num", 3);
+        int lineIdx = colMap.getOrDefault("line_num", 4);
+        int leftIdx = colMap.getOrDefault("left", 6);
+        int topIdx = colMap.getOrDefault("top", 7);
+        int widthIdx = colMap.getOrDefault("width", 8);
+        int heightIdx = colMap.getOrDefault("height", 9);
+        int textIdx = colMap.getOrDefault("text", 11);
+
+        int minColCount = Math.max(textIdx, Math.max(heightIdx, Math.max(widthIdx, Math.max(topIdx, Math.max(leftIdx, Math.max(lineIdx, Math.max(parIdx, Math.max(blockIdx, levelIdx)))))))) + 1;
+
+        class LineAccumulator {
+            final List<String> words = new ArrayList<>();
+            int minLeft = Integer.MAX_VALUE;
+            int minTop = Integer.MAX_VALUE;
+            int maxRight = Integer.MIN_VALUE;
+            int maxBottom = Integer.MIN_VALUE;
+
+            void addWord(String word, int left, int top, int width, int height) {
+                words.add(word);
+                if (left < minLeft) minLeft = left;
+                if (top < minTop) minTop = top;
+                int right = left + width;
+                if (right > maxRight) maxRight = right;
+                int bottom = top + height;
+                if (bottom > maxBottom) maxBottom = bottom;
+            }
+        }
+
+        Map<String, LineAccumulator> groupMap = new LinkedHashMap<>();
+
+        for (int i = startLine; i < lines.length; i++) {
+            String line = lines[i];
+            if (line.trim().isEmpty()) continue;
+            String[] cols = line.split("\t", -1);
+            if (cols.length < minColCount) continue;
+
+            try {
+                int level = Integer.parseInt(cols[levelIdx].trim());
+                if (level != 5) continue;
+
+                String text = cols[textIdx].trim();
+                if (text.isEmpty()) continue;
+
+                int blockNum = Integer.parseInt(cols[blockIdx].trim());
+                int parNum = Integer.parseInt(cols[parIdx].trim());
+                int lineNum = Integer.parseInt(cols[lineIdx].trim());
+                int left = Integer.parseInt(cols[leftIdx].trim());
+                int top = Integer.parseInt(cols[topIdx].trim());
+                int width = Integer.parseInt(cols[widthIdx].trim());
+                int height = Integer.parseInt(cols[heightIdx].trim());
+
+                String key = blockNum + "_" + parNum + "_" + lineNum;
+                groupMap.computeIfAbsent(key, k -> new LineAccumulator())
+                        .addWord(text, left, top, width, height);
+            } catch (NumberFormatException ignored) {
+                // Skip malformed rows
+            }
+        }
+
+        if (groupMap.isEmpty()) {
+            return "[]";
+        }
+
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (LineAccumulator acc : groupMap.values()) {
+            Map<String, Object> map = new LinkedHashMap<>();
+            map.put("Text", String.join(" ", acc.words));
+            map.put("X", acc.minLeft);
+            map.put("Y", acc.minTop);
+            map.put("Width", acc.maxRight - acc.minLeft);
+            map.put("Height", acc.maxBottom - acc.minTop);
+            result.add(map);
+        }
+
+        try {
+            return new ObjectMapper().writeValueAsString(result);
+        } catch (Exception e) {
+            return "[]";
+        }
     }
 
     private String cleanOcrFacultyName(String raw) {

@@ -9,6 +9,7 @@ COPY src src
 RUN mvn -q -B clean package -DskipTests
 
 FROM eclipse-temurin:21-jre-alpine
+RUN apk add --no-cache tesseract-ocr tesseract-ocr-data-eng fontconfig ttf-dejavu
 WORKDIR /app
 COPY --from=build /app/target/*.jar app.jar
 
