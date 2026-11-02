@@ -337,7 +337,8 @@ export default function SectionTimetablePage({ user }) {
     if (code.includes('CSC302') || code === 'ADSA' || subName.includes('DATA STRUCTURES')) return isLab ? 'ADSA LAB' : 'ADSA';
     if (code.includes('CSC304') || code === 'OOPJ' || subName.includes('JAVA')) return isLab ? 'OOPJ LAB' : 'OOPJ';
     if (code.includes('APT301') || code === 'APTITUDE' || code === 'AT' || subName.includes('APTITUDE')) return 'AT';
-    if (code.includes('TEC301') || code === 'TECHNICAL_TEST' || code === 'TT' || subName.includes('TECHNICAL')) return 'TT';
+    if (code.includes('LEH101') || subName.includes('TECHNICAL ENGLISH') || subName === 'ENGLISH') return isLab ? 'Technical English Lab' : 'Technical English';
+    if (code.includes('TEC301') || code === 'TECHNICAL_TEST' || code === 'TT' || subName.includes('TECHNICAL TEST') || subName === 'TECHNICAL TEST') return 'TT';
     if (code.includes('LEE301') || code === 'LEETCODE' || code === 'LC' || subName.includes('LEET')) return 'LC';
     if (code.includes('COU301') || code === 'COUNSELLING' || code === 'COUN' || subName.includes('COUNSEL')) return 'COUN';
     if (code.includes('SDA301') || code === 'CAREER_SKILL_DEVELOPMENT' || code === 'CSD' || subName.includes('CAREER')) return 'CSD';

@@ -639,42 +639,68 @@ public class TimetableSolverService {
         List<SpecialActivityDefinition> activityConfigs = getSpecialActivitiesConfig();
 
         for (SpecialActivityDefinition def : activityConfigs) {
-            List<Slot> targetSlots = new ArrayList<>();
-            for (int p = 0; p < def.getPeriodCount(); p++) {
-                final int periodNum = def.getStartPeriod() + p;
-                Slot targetSlot = slots.stream()
-                        .filter(s -> s.dayOfWeek.equalsIgnoreCase(def.getDay()) && s.periodNumber == periodNum)
-                        .findFirst()
-                        .orElse(null);
-                if (targetSlot != null) {
-                    targetSlots.add(targetSlot);
-                }
-            }
-
-            if (targetSlots.size() < def.getPeriodCount()) {
-                log.warn("Special activity {} {} P{} not all slots found", def.getCode(), def.getDay(), def.getStartPeriod());
-                continue;
-            }
-
-            Subject specSub = subjectRepository.findBySubjectCode(def.getCode()).orElse(null);
-            if (specSub == null) {
-                for (String alias : def.getAliases()) {
-                    specSub = subjectRepository.findBySubjectCode(alias).orElse(null);
-                    if (specSub != null) break;
-                }
-            }
-            if (specSub == null) {
-                specSub = subjectRepository.save(Subject.builder()
-                        .subjectCode(def.getCode())
-                        .subjectName(def.getTitle())
-                        .department("General")
-                        .subjectType("SPECIAL")
-                        .requiresLab(false)
-                        .active(true)
-                        .build());
-            }
-
             for (Batch batch : batches) {
+                // Check if an offering exists or assigns faculty for this subject and batch
+                final SpecialActivityDefinition currentDef = def;
+                SubjectOffering offeringMatch = offeringRepository.findByActiveTrue().stream()
+                        .filter(o -> o.getBatch() != null && o.getBatch().getId().equals(batch.getId())
+                                && o.getSubject() != null && (currentDef.matchesCode(o.getSubject().getSubjectCode())
+                                        || (o.getSubject().getSubjectName() != null && currentDef.getTitle() != null
+                                            && o.getSubject().getSubjectName().toUpperCase().contains(currentDef.getTitle().toUpperCase()))))
+                        .findFirst().orElse(null);
+
+                // For Semester 1 batches: only schedule special activities that are approved offerings for this batch
+                if (batch.getSemester() != null && batch.getSemester() == 1 && offeringMatch == null) {
+                    continue;
+                }
+
+                Subject specSub = offeringMatch != null ? offeringMatch.getSubject() : null;
+                if (specSub == null) {
+                    specSub = subjectRepository.findBySubjectCode(def.getCode()).orElse(null);
+                    if (specSub == null) {
+                        for (String alias : def.getAliases()) {
+                            specSub = subjectRepository.findBySubjectCode(alias).orElse(null);
+                            if (specSub != null) break;
+                        }
+                    }
+                }
+                if (specSub == null) {
+                    specSub = subjectRepository.save(Subject.builder()
+                            .subjectCode(def.getCode())
+                            .subjectName(def.getTitle())
+                            .department("General")
+                            .subjectType("SPECIAL")
+                            .requiresLab(false)
+                            .active(true)
+                            .build());
+                }
+
+                int periodCount = def.getPeriodCount();
+                if ("LEETCODE".equalsIgnoreCase(def.getActivityType()) && specSub != null) {
+                    if (specSub.getLabDuration() != null && specSub.getLabDuration() > 0) {
+                        periodCount = specSub.getLabDuration();
+                    } else if (specSub.getCalculatedWeeklyHours() >= 2.0) {
+                        periodCount = (int) Math.round(specSub.getCalculatedWeeklyHours());
+                    }
+                }
+
+                List<Slot> targetSlots = new ArrayList<>();
+                for (int p = 0; p < periodCount; p++) {
+                    final int periodNum = def.getStartPeriod() + p;
+                    Slot targetSlot = slots.stream()
+                            .filter(s -> s.dayOfWeek.equalsIgnoreCase(def.getDay()) && s.periodNumber == periodNum)
+                            .findFirst()
+                            .orElse(null);
+                    if (targetSlot != null) {
+                        targetSlots.add(targetSlot);
+                    }
+                }
+
+                if (targetSlots.size() < periodCount) {
+                    log.warn("Special activity {} {} P{} not all slots found for section {}", def.getCode(), def.getDay(), def.getStartPeriod(), batch.getBatchName());
+                    continue;
+                }
+
                 // AT, TT, LC, COUN, NPTEL and CSD are ALL held in the section's home classroom. Never use a LAB room.
                 Room homeRoom = batchHomeRoomMap != null ? batchHomeRoomMap.get(batch.getId()) : null;
                 Room room = (homeRoom != null && !isLabRoom(homeRoom.getRoomType())) ? homeRoom : null;
@@ -686,13 +712,6 @@ public class TimetableSolverService {
                 }
 
                 Faculty fac = null;
-                // Check if an offering already assigned a specific faculty member for this subject and batch
-                final SpecialActivityDefinition currentDef = def;
-                SubjectOffering offeringMatch = offeringRepository.findByActiveTrue().stream()
-                        .filter(o -> o.getBatch() != null && o.getBatch().getId().equals(batch.getId())
-                                && o.getSubject() != null && currentDef.matchesCode(o.getSubject().getSubjectCode()))
-                        .findFirst().orElse(null);
-
                 if (offeringMatch != null && offeringMatch.getAssignedFaculty() != null) {
                     Faculty assigned = offeringMatch.getAssignedFaculty();
                     boolean allAvail = targetSlots.stream().allMatch(slot -> {
@@ -709,7 +728,7 @@ public class TimetableSolverService {
                             facultySlotMap, facultyDailyLoadMap, facultyUnavailableSet);
                 }
 
-                Demand specDemand = new Demand(null, batch, specSub, fac, "SPECIAL", def.getActivityType(), def.getPeriodCount());
+                Demand specDemand = new Demand(offeringMatch != null ? offeringMatch.getId() : null, batch, specSub, fac, "SPECIAL", def.getActivityType(), periodCount);
 
                 for (Slot targetSlot : targetSlots) {
                     entries.add(buildEntry(specDemand, targetSlot, room));
@@ -718,7 +737,7 @@ public class TimetableSolverService {
                 }
 
                 if (room != null) {
-                    assignments.add(buildAssignment(specDemand, targetSlots.get(0), room, def.getPeriodCount(), false));
+                    assignments.add(buildAssignment(specDemand, targetSlots.get(0), room, periodCount, false));
                 }
             }
         }
@@ -746,28 +765,42 @@ public class TimetableSolverService {
         Map<String, List<Slot>> dayToSlots = slots.stream()
                 .collect(Collectors.groupingBy(s -> s.dayOfWeek, LinkedHashMap::new, Collectors.toList()));
 
-        // Preferred day order for this subject in this section
+        // Preferred day order for this subject in this section: prioritize days with the fewest scheduled periods
+        // for this section to maintain a balanced daily load across Monday-Friday.
         List<String> days = new ArrayList<>(dayToSlots.keySet());
         int dayShift = (int) ((batchId * 2 + subjectId) % Math.max(1, days.size()));
         List<String> orderedDays = new ArrayList<>();
         for (int i = 0; i < days.size(); i++) {
             orderedDays.add(days.get((i + dayShift) % days.size()));
         }
+        orderedDays.sort(Comparator.comparingLong((String d) -> {
+            return batchSlotMap.keySet().stream()
+                    .filter(k -> k.dayOfWeek().equalsIgnoreCase(d) && batchSlotMap.get(k).contains(demand.batch.getId()))
+                    .count();
+        }).thenComparingInt(this::dayOrder));
 
-        // Pass 1: Spread across distinct days, with rotated period order on each day!
+        // Pass 1: Spread across distinct days, clustering periods to reduce intra-day gaps
         for (String day : orderedDays) {
             if (placed >= demand.periodsNeeded) break;
             if (usedDays.contains(day) && placed < Math.min(demand.periodsNeeded, 5)) continue;
 
             List<Slot> daySlots = new ArrayList<>(dayToSlots.getOrDefault(day, Collections.emptyList()));
-            int dayIdx = dayOrder(day);
 
-            // Shift preferred period for each subject on each day
-            // Guarantees Monday first 3 hrs differ from Tuesday first 3 hrs, Wednesday first 3 hrs, etc.
-            int preferredPeriod = 1 + (int) ((batchId * 2 + dayIdx * 2 + subjectId * 3) % 6);
+            // Find periods already occupied by this batch on this day to prefer contiguous placements
+            Set<Integer> batchOccupiedOnDay = daySlots.stream()
+                    .filter(s -> batchSlotMap.getOrDefault(new SlotKey(s.dayOfWeek, s.periodNumber), Set.of()).contains(demand.batch.getId()))
+                    .map(s -> s.periodNumber)
+                    .collect(Collectors.toSet());
 
-            daySlots.sort(Comparator.comparingInt((Slot s) -> Math.abs(s.periodNumber - preferredPeriod))
-                    .thenComparingInt(s -> s.periodNumber));
+            daySlots.sort(Comparator.comparingInt((Slot s) -> {
+                if (batchOccupiedOnDay.isEmpty()) {
+                    return s.periodNumber; // Fill earliest period first
+                }
+                int minDistance = batchOccupiedOnDay.stream()
+                        .mapToInt(occ -> Math.abs(s.periodNumber - occ))
+                        .min().orElse(0);
+                return minDistance * 10 + s.periodNumber;
+            }));
 
             for (Slot slot : daySlots) {
                 if (placed >= demand.periodsNeeded) break;
@@ -811,13 +844,24 @@ public class TimetableSolverService {
             }
         }
 
-        // Pass 2: Remaining periods needed (e.g. 4th or 5th period of a subject)
+        // Pass 2: Remaining periods needed (e.g. 5th or 6th period of a subject)
         if (placed < demand.periodsNeeded) {
             List<Slot> candidateSlots = new ArrayList<>(slots);
-            candidateSlots.sort(Comparator.comparingInt((Slot s) -> {
-                int dIdx = dayOrder(s.dayOfWeek);
-                int prefP = 1 + (int) ((batchId * 2 + dIdx * 2 + subjectId * 3 + 3) % 6);
-                return Math.abs(s.periodNumber - prefP);
+            candidateSlots.sort(Comparator.comparingLong((Slot s) -> {
+                return batchSlotMap.keySet().stream()
+                        .filter(k -> k.dayOfWeek().equalsIgnoreCase(s.dayOfWeek) && batchSlotMap.get(k).contains(demand.batch.getId()))
+                        .count();
+            }).thenComparingInt((Slot s) -> {
+                Set<Integer> batchOccupiedOnDay = slots.stream()
+                        .filter(sl -> sl.dayOfWeek.equalsIgnoreCase(s.dayOfWeek) &&
+                                batchSlotMap.getOrDefault(new SlotKey(sl.dayOfWeek, sl.periodNumber), Set.of()).contains(demand.batch.getId()))
+                        .map(sl -> sl.periodNumber)
+                        .collect(Collectors.toSet());
+                if (batchOccupiedOnDay.isEmpty()) return s.periodNumber;
+                int minDistance = batchOccupiedOnDay.stream()
+                        .mapToInt(occ -> Math.abs(s.periodNumber - occ))
+                        .min().orElse(0);
+                return minDistance * 10 + s.periodNumber;
             }));
 
             for (Slot slot : candidateSlots) {
