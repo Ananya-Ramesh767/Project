@@ -45,7 +45,7 @@ This document specifies the exact JSON data contract exposed by **Person A (Admi
       "facultyId": 1,
       "employeeId": "EMP101",
       "name": "Dr. Alan Turing",
-      "email": "turing@odysseus.edu",
+      "email": "turing@eec.srmrmp.edu.in",
       "department": "CSE",
       "maxWeeklyLoad": 18,
       "eligibleSubjectIds": [1, 2]

@@ -207,7 +207,7 @@ public class LessonPlanDataInitializer implements CommandLineRunner {
                 facultyRepository.save(Faculty.builder()
                         .employeeId("CSE-LP-001")
                         .name("Sample Faculty")
-                        .email("faculty@odysseus.edu") // matches the seeded "faculty" User for /my-plans demo
+                        .email("faculty@eec.srmrmp.edu.in") // matches the seeded "faculty" User for /my-plans demo
                         .department("CSE")
                         .maxWeeklyLoad(18)
                         .active(true)

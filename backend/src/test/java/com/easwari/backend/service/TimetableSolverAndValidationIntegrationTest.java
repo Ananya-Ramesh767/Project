@@ -86,7 +86,7 @@ public class TimetableSolverAndValidationIntegrationTest {
             Faculty f = facultyRepository.save(Faculty.builder()
                     .employeeId("FAC-TEST-0" + i)
                     .name("Dr. Test Professor " + i)
-                    .email("test.prof" + i + "@odysseus.edu")
+                    .email("test.prof" + i + "@eec.srmrmp.edu.in")
                     .department("Computer Science Engineering")
                     .maxWeeklyLoad(20)
                     .active(true)

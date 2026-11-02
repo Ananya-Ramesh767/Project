@@ -704,7 +704,7 @@ public class PdfExtractionService {
                 // Auto-generate email if missing
                 if (email.isEmpty() || !email.contains("@")) {
                     String namePart = name.toLowerCase().replaceAll("[^a-z]", ".");
-                    email = namePart + "@odysseus.edu";
+                    email = namePart + "@eec.srmrmp.edu.in";
                 }
 
                 // Fallback department
@@ -813,7 +813,7 @@ public class PdfExtractionService {
                 String empId = im.find() ? im.group().trim() : String.format("FAC-%04d", empCounter++);
 
                 if (email == null || email.isEmpty()) {
-                    email = fullName.toLowerCase().replaceAll("[^a-z]", ".").replaceAll("\\.+", ".") + "@odysseus.edu";
+                    email = fullName.toLowerCase().replaceAll("[^a-z]", ".").replaceAll("\\.+", ".") + "@eec.srmrmp.edu.in";
                 }
 
                 Map<String, Object> map = new LinkedHashMap<>();
@@ -872,7 +872,7 @@ public class PdfExtractionService {
                         }
                     }
                     String empId = String.format("FAC-%04d", numEmpCounter++);
-                    String email = fullName.toLowerCase().replaceAll("[^a-z]", ".").replaceAll("\\.+", ".") + "@odysseus.edu";
+                    String email = fullName.toLowerCase().replaceAll("[^a-z]", ".").replaceAll("\\.+", ".") + "@eec.srmrmp.edu.in";
                     Map<String, Object> map = new LinkedHashMap<>();
                     map.put("employeeId", empId);
                     map.put("name", fullName);
@@ -910,7 +910,7 @@ public class PdfExtractionService {
                         seen.add(norm);
 
                         String email = parts.length > 2 ? parts[2].trim().replace("\"", "") :
-                                       (empId.toLowerCase().replaceAll("[^a-z0-9]", "") + "@odysseus.edu");
+                                       (empId.toLowerCase().replaceAll("[^a-z0-9]", "") + "@eec.srmrmp.edu.in");
                         String dept  = parts.length > 3 ? parts[3].trim().replace("\"", "") :
                                        (defaultDepartment != null ? defaultDepartment : "CSE");
                         int maxLoad  = parts.length > 4 ? (int) parseDoubleSafe(parts[4].trim(), 18) : 18;
@@ -941,7 +941,7 @@ public class PdfExtractionService {
                     seen.add(norm);
 
                     String email = m.group(4) != null ? m.group(4).trim() :
-                                   (empId.toLowerCase() + "@odysseus.edu");
+                                   (empId.toLowerCase() + "@eec.srmrmp.edu.in");
 
                     Map<String, Object> map = new LinkedHashMap<>();
                     map.put("employeeId",    empId);
@@ -995,7 +995,7 @@ public class PdfExtractionService {
                     if (seenE.contains(norm)) continue;
                     seenE.add(norm);
                     String empId = String.format("FAC-%04d", eCounter++);
-                    String email = fullName.toLowerCase().replaceAll("[^a-z]", ".").replaceAll("\\.+", ".") + "@odysseus.edu";
+                    String email = fullName.toLowerCase().replaceAll("[^a-z]", ".").replaceAll("\\.+", ".") + "@eec.srmrmp.edu.in";
                     Map<String, Object> map = new LinkedHashMap<>();
                     map.put("employeeId", empId);
                     map.put("name", fullName);
@@ -1018,7 +1018,7 @@ public class PdfExtractionService {
                     if (seenE.contains(norm)) continue;
                     seenE.add(norm);
                     String empId = String.format("FAC-%04d", eCounter++);
-                    String email = fullName.toLowerCase().replaceAll("[^a-z]", ".").replaceAll("\\.+", ".") + "@odysseus.edu";
+                    String email = fullName.toLowerCase().replaceAll("[^a-z]", ".").replaceAll("\\.+", ".") + "@eec.srmrmp.edu.in";
                     Map<String, Object> map = new LinkedHashMap<>();
                     map.put("employeeId", empId);
                     map.put("name", fullName);
@@ -1354,7 +1354,7 @@ public class PdfExtractionService {
                 .replaceAll("\\.+", ".");
         if (clean.startsWith(".")) clean = clean.substring(1);
         if (clean.endsWith(".")) clean = clean.substring(0, clean.length() - 1);
-        return clean + "@odysseus.edu";
+        return clean + "@eec.srmrmp.edu.in";
     }
 
     // ── Helper: detect column header mappings from a token array ─────────────────────
@@ -1501,7 +1501,7 @@ public class PdfExtractionService {
 
             String email = fields.getOrDefault("email", "").trim();
             if (email.isEmpty() || !email.contains("@")) {
-                email = name.toLowerCase().replaceAll("[^a-z]", ".") + "@odysseus.edu";
+                email = name.toLowerCase().replaceAll("[^a-z]", ".") + "@eec.srmrmp.edu.in";
             }
 
             String dept = fields.getOrDefault("department", "").trim();

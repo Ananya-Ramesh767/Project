@@ -608,7 +608,7 @@ public class FacultyController {
 
         String email = (String) payload.get("email");
         if (email == null || email.trim().isEmpty() || !email.contains("@")) {
-            email = name.toLowerCase().replaceAll("[^a-z0-9]", ".") + "@odysseus.edu";
+            email = name.toLowerCase().replaceAll("[^a-z0-9]", ".") + "@eec.srmrmp.edu.in";
         }
 
         Faculty f = Faculty.builder()
@@ -702,7 +702,7 @@ public class FacultyController {
                             ? "FAC-" + System.currentTimeMillis() % 100000 : mEmpId.trim();
                     String rawEmail = (String) manual.get("email");
                     String finalEmail = (rawEmail == null || rawEmail.trim().isEmpty() || !rawEmail.contains("@"))
-                            ? mName.toLowerCase().replaceAll("[^a-z0-9]", ".") + "@odysseus.edu" : rawEmail.trim();
+                            ? mName.toLowerCase().replaceAll("[^a-z0-9]", ".") + "@eec.srmrmp.edu.in" : rawEmail.trim();
                     String rawDept = (String) manual.get("department");
                     String finalDept = (rawDept == null || rawDept.trim().isEmpty()) ? subject.getDepartment() : rawDept.trim();
                     String finalName = mName.trim();
@@ -1122,7 +1122,7 @@ public class FacultyController {
             f.setName(finalName);
             String email = (String) map.get("email");
             if (email == null || email.trim().isEmpty() || !email.contains("@")) {
-                email = finalName.toLowerCase().replaceAll("[^a-z0-9]", ".") + "@odysseus.edu";
+                email = finalName.toLowerCase().replaceAll("[^a-z0-9]", ".") + "@eec.srmrmp.edu.in";
             }
             f.setEmail(email);
             f.setDepartment(finalDept);

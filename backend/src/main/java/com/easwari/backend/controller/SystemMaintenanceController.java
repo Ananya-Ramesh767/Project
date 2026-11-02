@@ -44,9 +44,9 @@ public class SystemMaintenanceController {
              var stmt = conn.createStatement()) {
             new java.io.File("backend/data/backup_phase1").mkdirs();
             new java.io.File("data/backup_phase1").mkdirs();
-            stmt.execute("BACKUP TO 'data/backup_phase1/odysseus_db_backup.zip'");
-            log.info("[SystemMaintenance] Database backed up to data/backup_phase1/odysseus_db_backup.zip");
-            return ResponseEntity.ok(Map.of("status", "success", "file", "data/backup_phase1/odysseus_db_backup.zip"));
+            stmt.execute("BACKUP TO 'data/backup_phase1/easwari_db_backup.zip'");
+            log.info("[SystemMaintenance] Database backed up to data/backup_phase1/easwari_db_backup.zip");
+            return ResponseEntity.ok(Map.of("status", "success", "file", "data/backup_phase1/easwari_db_backup.zip"));
         } catch (Exception e) {
             log.error("[SystemMaintenance] Backup error: {}", e.getMessage(), e);
             return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));

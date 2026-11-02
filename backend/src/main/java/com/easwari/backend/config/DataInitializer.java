@@ -110,7 +110,7 @@ public class DataInitializer implements CommandLineRunner {
         if (!userRepository.existsByUsername("admin")) {
             userRepository.save(User.builder()
                     .username("admin")
-                    .email("admin@odysseus.edu")
+                    .email("admin@eec.srmrmp.edu.in")
                     .password(passwordEncoder.encode("admin123"))
                     .role("ROLE_ADMIN")
                     .fullName("System Administrator")
@@ -121,7 +121,7 @@ public class DataInitializer implements CommandLineRunner {
         if (!userRepository.existsByUsername("faculty")) {
             userRepository.save(User.builder()
                     .username("faculty")
-                    .email("faculty@odysseus.edu")
+                    .email("faculty@eec.srmrmp.edu.in")
                     .password(passwordEncoder.encode("faculty123"))
                     .role("ROLE_FACULTY")
                     .fullName("Faculty User")

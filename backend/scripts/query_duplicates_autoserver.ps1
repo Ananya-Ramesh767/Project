@@ -1,7 +1,7 @@
 # PowerShell script to query duplicate timetable assignments using H2 Shell with AUTO_SERVER mode
 $jar = "C:\Users\anany\.m2\repository\com\h2database\h2\2.2.224\h2-2.2.224.jar"
 # Use same DB file path as in application.yml (without .mv.db extension)
-$dbPath = "C:\Users\anany\Downloads\TIMETABLE_GENERATION (2)\TIMETABLE_GENERATION (1)\TIMETABLE_GENERATION\java project\OOPS-JAVA---Odysseus\backend\data\odysseus_db"
+$dbPath = "$PSScriptRoot\..\data\odysseus_db"
 # Connection URL matching application.yml (includes AUTO_SERVER to allow concurrent access)
 $url = "jdbc:h2:file:$dbPath;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;AUTO_SERVER=TRUE;DB_CLOSE_DELAY=-1"
 $sql = @"
