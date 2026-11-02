@@ -762,7 +762,7 @@ The UI should be:
 - Clean
 - Simple
 - Responsive
-- Consistent with the existing Odysseus design
+- Consistent with the existing Easwari Engineering College design
 - Easy for a college administrator to understand
 
 For every form:
@@ -1062,7 +1062,7 @@ Create/update a short developer document explaining:
 
 **Do not stop at creating UI mockups.**
 
-Implement the complete Person A data/input workflow using the existing Odysseus architecture.
+Implement the complete Person A data/input workflow using the existing Easwari Engineering College architecture.
 
 The desired end-to-end flow is:
 
